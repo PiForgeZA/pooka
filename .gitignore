@@ -1,0 +1,5 @@
+/pooka
+/dist/
+*.test
+*.out
+.pooka.yaml
