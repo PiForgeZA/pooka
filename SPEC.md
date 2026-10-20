@@ -57,8 +57,11 @@ The template gives environments their speed. Build it once. Rebuild it when tool
 
 1. Create an unprivileged Ubuntu LTS container on the thin storage.
 2. Set `features: nesting=1,keyctl=1` so systemd and Docker work.
-3. Install the tools the user wants: git, build tools, language runtimes, coding agents.
-4. Create a user named `pooka` with passwordless sudo.
+3. Install base packages with apt. Install mise. Install language runtimes, coding
+   agents and herdr with mise from `/etc/mise/config.toml`. The repo keeps this file at
+   `scripts/template/mise.toml`. Edit it to change the tool set.
+4. Create a user named `pooka` with passwordless sudo. mise installs tools for this user.
+   Commands run as `pooka`, not root.
 5. Place `/etc/pooka/firstboot.sh`. The create command runs this script once. See section 9.
 6. Clean caches and logs. Stop the container.
 7. Convert it with `pct template <id>`.
@@ -79,7 +82,12 @@ vmid_range: [9100, 9199]
 disk_gb: 32
 cores: 4
 memory_mb: 8192
+ssh_pubkey: ~/.ssh/id_ed25519.pub
 ```
+
+The template runs an SSH server that accepts keys only and refuses root. `create` passes
+the public key named by `ssh_pubkey` to the firstboot script as `POOKA_SSH_PUBKEY`. The
+user can then reach the environment with `ssh pooka@<ip>` and with tools such as herdr.
 
 A `.pooka` file in the current directory can name the active environment. The command
 `pooka use <name>` writes it. Commands without a name use the active environment.
@@ -100,7 +108,7 @@ A `.pooka` file in the current directory can name the active environment. The co
 8. Wait until `pct exec <vmid> -- systemctl is-system-running` returns `running` or
    `degraded`. Time out after 30 seconds.
 9. Run `pct exec <vmid> -- /etc/pooka/firstboot.sh` if the file exists. Pass the
-   environment name in `POOKA_NAME`.
+   environment name in `POOKA_NAME` and the public key in `POOKA_SSH_PUBKEY`.
 10. Print the name, VMID and IP address.
 
 The firstboot script can set git identity, copy dotfiles and read secrets. pooka does
@@ -115,7 +123,7 @@ Each command maps to `pct` calls on the host over SSH. The table gives the mappi
 |---|---|
 | `pooka create <name>` | Section 9. |
 | `pooka ls` | `pct list`, filtered by the `pooka` tag. Show name, VMID, status, IP. |
-| `pooka exec <name> -- <cmd...>` | `pct exec <vmid> -- <cmd...>`. Add `-t` for a TTY. |
+| `pooka exec <name> -- <cmd...>` | `pct exec <vmid> -- runuser -l pooka -c '<cmd...>'`. Add `-t` for a TTY. `--root` runs as root. |
 | `pooka console <name>` | `ssh -t host pct exec <vmid> -- su - pooka`. |
 | `pooka push <name> <local> <remote>` | `scp` to host, then `pct push`. |
 | `pooka pull <name> <remote> <local>` | `pct pull`, then `scp` from host. |

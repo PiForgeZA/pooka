@@ -24,16 +24,27 @@ focus: Publish repo, build the template container, scaffold the Go CLI
   106 to 111 on nvme_storage.
 - Proxmox VE 8.4, kernel 6.8.12-10-pve.
 
+## Done after the first commit
+
+- Repo published: https://github.com/PiForgeZA/pooka (public).
+- SSH from the dev box to the host works as `ssh proxmox` (host 192.168.68.200, PVE 8.4.1,
+  24 cores, 31 GB RAM).
+- Decisions: mise manages runtimes and agents via `scripts/template/mise.toml`; herdr
+  is in the default tool set; the template runs sshd (keys only, no root) and `create`
+  injects the user's public key via `POOKA_SSH_PUBKEY`; commands run as user `pooka`.
+- Scripts written: `scripts/build-template.sh`, `scripts/bench.sh`,
+  `scripts/template/{provision.sh,firstboot.sh,mise.toml}`. Copied to
+  `/root/pooka-scripts` on the host. Template 9000 build started 2026-10-20.
+
 ## Next steps in order
 
-1. Confirm the GitHub target and push.
-2. Verify SSH from the dev box to the host. Install Go. Disk is tight, so free space or
-   put `GOCACHE` and `GOMODCACHE` on a larger mount first.
-3. Write `scripts/build-template.sh` per SPEC.md section 7. Build template 9000 on
-   local-lvm.
-4. Time clone, start, checkpoint and restore on the host. Record in docs/benchmarks.md.
-5. Scaffold the Go CLI: `Host` interface over SSH, `Backend` interface, LXC backend,
+1. Confirm template 9000 exists (`pct config 9000`). Rebuild if the build failed.
+2. Run `bash /root/pooka-scripts/bench.sh` on the host. Record in docs/benchmarks.md.
+3. Install Go on the dev box. Disk is tight, so free space or put `GOCACHE` and
+   `GOMODCACHE` on a larger mount first.
+4. Scaffold the Go CLI: `Host` interface over SSH, `Backend` interface, LXC backend,
    commands from SPEC.md section 10. Unit tests mock `Host`.
+5. Commit the scripts and spec changes (user commits; see AGENTS.md).
 
 ## Suggested skills
 
