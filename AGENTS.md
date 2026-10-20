@@ -73,3 +73,12 @@ Track all documentation under `docs/`, except SPEC.md which stays at the root.
 
 When asked to commit, use conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`,
 `test:`, `chore:`. One logical change per commit. Keep SPEC.md in step with behaviour.
+
+## Branches and merging
+
+- `main` is protected. All changes arrive by pull request with CI green.
+- PRs are squash-merged. The PR title becomes the commit on `main`, so it must be a
+  conventional commit, for example `feat: idle sleep`. GoReleaser builds the changelog
+  from these titles.
+- Update a branch by merging `main` into it. Never rebase or force-push a shared branch.
+- Branches are deleted after merge.

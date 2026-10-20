@@ -1,0 +1,77 @@
+# GoReleaser v2. Runs on tags matching v*. See .github/workflows/release.yml.
+version: 2
+
+project_name: pooka
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: pooka
+    main: ./cmd/pooka
+    binary: pooka
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/PiForgeZA/pooka/internal/cli.Version={{ .Version }}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - SPEC.md
+      - scripts/**
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev+{{ .ShortCommit }}"
+
+changelog:
+  sort: asc
+  use: github
+  groups:
+    - title: Features
+      regexp: '^feat(\(.*\))?:'
+      order: 0
+    - title: Fixes
+      regexp: '^fix(\(.*\))?:'
+      order: 1
+    - title: Docs
+      regexp: '^docs(\(.*\))?:'
+      order: 2
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - "^chore"
+      - "^test"
+      - "^ci"
+
+release:
+  github:
+    owner: PiForgeZA
+    name: pooka
+  draft: false
+  prerelease: auto
+  footer: |
+    ## Install
+
+    Download the archive for your platform, unpack it, and put `pooka` on your PATH.
+    The archive also contains `scripts/` for building the template on your Proxmox host.
+    See the README quick start.

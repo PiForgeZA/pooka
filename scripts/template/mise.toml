@@ -1,0 +1,15 @@
+# System-wide mise config for pooka environments. Installed to /etc/mise/config.toml.
+# Every new environment gets these tools. A project can override versions with its own
+# mise.toml or .tool-versions. Edit, then rebuild the template.
+[tools]
+node = "22"
+python = "3.13"
+go = "1.27"
+"npm:@openai/codex" = "latest"
+# Claude Code is installed by its native installer in provision.sh, because the npm
+# package needs a postinstall step that the mise npm backend skips.
+herdr = "latest"
+
+[settings]
+experimental = true
+yes = true

@@ -57,8 +57,11 @@ The template gives environments their speed. Build it once. Rebuild it when tool
 
 1. Create an unprivileged Ubuntu LTS container on the thin storage.
 2. Set `features: nesting=1,keyctl=1` so systemd and Docker work.
-3. Install the tools the user wants: git, build tools, language runtimes, coding agents.
-4. Create a user named `pooka` with passwordless sudo.
+3. Install base packages with apt. Install mise. Install language runtimes, coding
+   agents and herdr with mise from `/etc/mise/config.toml`. The repo keeps this file at
+   `scripts/template/mise.toml`. Edit it to change the tool set.
+4. Create a user named `pooka` with passwordless sudo. mise installs tools for this user.
+   Commands run as `pooka`, not root.
 5. Place `/etc/pooka/firstboot.sh`. The create command runs this script once. See section 9.
 6. Clean caches and logs. Stop the container.
 7. Convert it with `pct template <id>`.
@@ -79,7 +82,12 @@ vmid_range: [9100, 9199]
 disk_gb: 32
 cores: 4
 memory_mb: 8192
+ssh_pubkey: ~/.ssh/id_ed25519.pub
 ```
+
+The template runs an SSH server that accepts keys only and refuses root. `create` passes
+the public key named by `ssh_pubkey` to the firstboot script as `POOKA_SSH_PUBKEY`. The
+user can then reach the environment with `ssh pooka@<ip>` and with tools such as herdr.
 
 A `.pooka` file in the current directory can name the active environment. The command
 `pooka use <name>` writes it. Commands without a name use the active environment.
@@ -95,12 +103,13 @@ A `.pooka` file in the current directory can name the active environment. The co
    linked clone.
 5. Set cores, memory and the `pooka` tag. Set the description to a JSON object with the
    pooka version, the creation time and the template ID.
-6. Resize the root disk to `disk_gb` if the template is smaller.
+6. Resize the root disk to `disk_gb` if the template is smaller. A resize costs about
+   23 s, so build the template at `disk_gb` (default 32 GB, thin) and this step is a no-op.
 7. Run `pct start <vmid>`.
 8. Wait until `pct exec <vmid> -- systemctl is-system-running` returns `running` or
    `degraded`. Time out after 30 seconds.
 9. Run `pct exec <vmid> -- /etc/pooka/firstboot.sh` if the file exists. Pass the
-   environment name in `POOKA_NAME`.
+   environment name in `POOKA_NAME` and the public key in `POOKA_SSH_PUBKEY`.
 10. Print the name, VMID and IP address.
 
 The firstboot script can set git identity, copy dotfiles and read secrets. pooka does
@@ -115,14 +124,14 @@ Each command maps to `pct` calls on the host over SSH. The table gives the mappi
 |---|---|
 | `pooka create <name>` | Section 9. |
 | `pooka ls` | `pct list`, filtered by the `pooka` tag. Show name, VMID, status, IP. |
-| `pooka exec <name> -- <cmd...>` | `pct exec <vmid> -- <cmd...>`. Add `-t` for a TTY. |
-| `pooka console <name>` | `ssh -t host pct exec <vmid> -- su - pooka`. |
+| `pooka exec <name> -- <cmd...>` | `lxc-attach -n <vmid> --clear-env -- runuser -l pooka -c '<cmd...>'`. Add `-t` for a TTY. `--root` runs as root. `lxc-attach` is what `pct exec` wraps, without 0.5 s of perl startup per call. |
+| `pooka console <name>` | `exec` of `bash -l` with a TTY. |
 | `pooka push <name> <local> <remote>` | `scp` to host, then `pct push`. |
 | `pooka pull <name> <remote> <local>` | `pct pull`, then `scp` from host. |
 | `pooka checkpoint <name> [--comment c]` | `pct snapshot <vmid> cp-<unix-time> --description c`. |
 | `pooka checkpoint ls <name>` | `pct listsnapshot <vmid>`. |
 | `pooka checkpoint rm <name> <id>` | `pct delsnapshot <vmid> <id>`. |
-| `pooka restore <name> <id>` | `pct stop`, `pct rollback <vmid> <id>`, `pct start`. |
+| `pooka restore <name> <id>` | `pct stop`, `pct rollback <vmid> <id>`, then on `lvmthin` storage `tune2fs -f -E clear_mmp $(pvesm path <rootfs volid>)`, then `pct start`. See ADR 0003. |
 | `pooka stop <name>` | `pct shutdown <vmid>`, then `pct stop` after 10 seconds. |
 | `pooka start <name>` | `pct start <vmid>`. |
 | `pooka destroy <name>` | `pct stop`, then `pct destroy <vmid> --purge`. |
@@ -143,9 +152,11 @@ only source of truth.
 
 ## 12. Transport
 
-Phase 1 runs `pct` over SSH. The CLI opens one SSH connection per command. It uses the
-system `ssh` binary so existing keys, agents and config work. Put this behind an
-interface named `Host` with one method: `Run(ctx, args, stdin, stdout, stderr)`.
+Phase 1 runs `pct` over SSH. The CLI uses the system `ssh` binary so existing keys,
+agents and config work. It enables SSH connection multiplexing (`ControlMaster`) so one
+handshake serves every call in a command. Put this behind an interface named `Host`
+with `Run(ctx, cmd)`, `CopyTo` and `CopyFrom`. Set `POOKA_DEBUG=1` to log every host
+call with its duration.
 
 Phase 2 replaces this with an HTTP client to a daemon on the host. Commands must not
 depend on SSH details.
@@ -183,7 +194,8 @@ implements the same interface.
 ## 15. Performance targets
 
 Measure these on the real host before the first release. Record the numbers in
-docs/benchmarks.md.
+docs/benchmarks.md. First measurement on 2026-10-20: create 7.2 s, restore about 5 s,
+all others within target.
 
 | Operation | Target |
 |---|---|
