@@ -130,7 +130,7 @@ Each command maps to `pct` calls on the host over SSH. The table gives the mappi
 | `pooka checkpoint <name> [--comment c]` | `pct snapshot <vmid> cp-<unix-time> --description c`. |
 | `pooka checkpoint ls <name>` | `pct listsnapshot <vmid>`. |
 | `pooka checkpoint rm <name> <id>` | `pct delsnapshot <vmid> <id>`. |
-| `pooka restore <name> <id>` | `pct stop`, `pct rollback <vmid> <id>`, `pct start`. |
+| `pooka restore <name> <id>` | `pct stop`, `pct rollback <vmid> <id>`, then on `lvmthin` storage `tune2fs -f -E clear_mmp $(pvesm path <rootfs volid>)`, then `pct start`. See ADR 0003. |
 | `pooka stop <name>` | `pct shutdown <vmid>`, then `pct stop` after 10 seconds. |
 | `pooka start <name>` | `pct start <vmid>`. |
 | `pooka destroy <name>` | `pct stop`, then `pct destroy <vmid> --purge`. |
@@ -191,7 +191,8 @@ implements the same interface.
 ## 15. Performance targets
 
 Measure these on the real host before the first release. Record the numbers in
-docs/benchmarks.md.
+docs/benchmarks.md. First measurement on 2026-10-20: create 7.2 s, restore about 5 s,
+all others within target.
 
 | Operation | Target |
 |---|---|

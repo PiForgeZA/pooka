@@ -44,7 +44,11 @@ s=$(t); pct snapshot "$VMID" cp1 --description bench >/dev/null
 row "checkpoint" "$(since "$s")"
 
 pct exec "$VMID" -- sh -c 'dd if=/dev/urandom of=/home/pooka/blob bs=1M count=200 status=none'
-s=$(t); pct stop "$VMID"; pct rollback "$VMID" cp1 >/dev/null; pct start "$VMID"
+s=$(t); pct stop "$VMID"; pct rollback "$VMID" cp1 >/dev/null
+rootvol=$(pct config "$VMID" | awk '/^rootfs:/{split($2,a,","); print a[1]}')
+stype=$(pvesm status | awk -v s="${rootvol%%:*}" '$1==s{print $2}')
+if [ "$stype" = lvmthin ]; then tune2fs -f -E clear_mmp "$(pvesm path "$rootvol")" >/dev/null; fi
+pct start "$VMID"
 row "restore (stop+rollback+start)" "$(since "$s")"
 
 s=$(t); pct stop "$VMID"

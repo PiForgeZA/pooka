@@ -20,3 +20,4 @@ Date: YYYY-MM-DD
 |---|---|---|
 | [0001](0001-lxc-first-backend.md) | Phase 1 uses LXC through pct over SSH | accepted |
 | [0002](0002-sprites-compatible-surface.md) | Follow the Sprites vocabulary and API | accepted |
+| [0003](0003-clear-mmp-on-restore.md) | Clear the ext4 MMP block after rollback on LVM-thin | accepted |

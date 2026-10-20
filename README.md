@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/banner.jpg" alt="pooka: a glowing púca conjuring Linux containers over a server rack" width="100%">
+</p>
+
 # pooka
 
 Spin up a fresh, isolated Linux environment on your own Proxmox hardware in seconds.
@@ -8,9 +12,11 @@ Irish folklore. This one lives on Proxmox.
 
 ## Status
 
-Pre-alpha. The name, the spec and the plan exist. The code does not yet.
-See [SPEC.md](SPEC.md) for what phase 1 builds and [docs/research.md](docs/research.md)
-for the investigation behind the design.
+Pre-alpha. The name, the spec, the template build scripts and first benchmarks exist.
+The CLI does not yet. See [SPEC.md](SPEC.md) for what phase 1 builds,
+[docs/research.md](docs/research.md) for the investigation behind the design, and
+[docs/benchmarks.md](docs/benchmarks.md) for measured numbers. First measurement on a
+Proxmox 8.4 host with LVM-thin: create in 7.2 s, checkpoint in 0.9 s, restore in 6.8 s.
 
 ## What it will do
 
