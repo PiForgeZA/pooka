@@ -1,0 +1,256 @@
+package lxc
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/PiForgeZA/pooka/internal/backend"
+	"github.com/PiForgeZA/pooka/internal/host"
+)
+
+const resourcesJSON = `[
+ {"vmid":100,"name":"other","status":"running","type":"lxc","tags":"calendar","node":"proxmox"},
+ {"vmid":9000,"name":"pooka-template","status":"stopped","type":"lxc","tags":"pooka-template","node":"proxmox","template":1},
+ {"vmid":9100,"name":"dev1","status":"running","type":"lxc","tags":"pooka","node":"proxmox"},
+ {"vmid":9101,"name":"dev2","status":"stopped","type":"lxc","tags":"agent;pooka","node":"proxmox"},
+ {"vmid":200,"name":"vm","status":"running","type":"qemu","tags":"pooka","node":"proxmox"}
+]`
+
+func newFake() *host.Fake {
+	f := &host.Fake{}
+	f.On("pvesh get /cluster/resources", resourcesJSON)
+	f.On("pct list", "VMID       Status     Lock         Name\n100        running                 other\n9100       running                 dev1\n9101       stopped                 dev2\n")
+	f.On("pct status 9100", "status: running\n")
+	f.On("pct status 9101", "status: stopped\n")
+	f.On("lxc-info -n 9100 -iH", "192.168.68.50\nfd00::1\n")
+	f.On("pct config", "rootfs: local-lvm:vm-9100-disk-0,size=16G\nhostname: dev1\n")
+	f.On("pvesh get /storage/local-lvm", `{"type":"lvmthin","storage":"local-lvm"}`)
+	f.On("pvesm path", "/dev/pve/vm-9100-disk-0\n")
+	f.On("lxc-attach -n 9102 --clear-env --keep-var TERM -- systemctl is-system-running", "running\n")
+	return f
+}
+
+func newBackend(f *host.Fake) *Backend {
+	return New(f, Options{Template: 9000, VMIDLow: 9100, VMIDHigh: 9199, Version: "test", Sleep: func(time.Duration) {}})
+}
+
+func TestListFiltersByTagAndType(t *testing.T) {
+	f := newFake()
+	envs, err := newBackend(f).List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(envs) != 2 {
+		t.Fatalf("want 2 envs, got %+v", envs)
+	}
+	if envs[0].Name != "dev1" || envs[0].IP != "192.168.68.50" || envs[0].Status != "running" {
+		t.Errorf("dev1 wrong: %+v", envs[0])
+	}
+	if envs[1].Name != "dev2" || envs[1].IP != "" {
+		t.Errorf("dev2 wrong: %+v", envs[1])
+	}
+}
+
+func TestGetNotFound(t *testing.T) {
+	_, err := newBackend(newFake()).Get(context.Background(), "other")
+	if !errors.Is(err, backend.ErrNotFound) {
+		t.Fatalf("untagged container must not be found, got %v", err)
+	}
+}
+
+func TestCreateSequence(t *testing.T) {
+	f := newFake()
+	f.On("lxc-info -n 9102 -iH", "192.168.68.52\n")
+	env, err := newBackend(f).Create(context.Background(), "dev3", backend.CreateOptions{Cores: 4, MemoryMB: 8192, DiskGB: 32, SSHPubKey: "ssh-ed25519 AAAA test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env.VMID != 9102 || env.IP != "192.168.68.52" {
+		t.Errorf("env: %+v", env)
+	}
+	want := []string{
+		"pct clone 9000 9102 --hostname dev3",
+		"pct set 9102 --tags pooka --description ",
+		"pct resize 9102 rootfs 32G",
+		"pct start 9102",
+		"lxc-attach -n 9102 --clear-env --keep-var TERM -- systemctl is-system-running",
+		"lxc-attach -n 9102 --clear-env --keep-var TERM -- test -x /etc/pooka/firstboot.sh",
+		"lxc-attach -n 9102 --clear-env --keep-var TERM -- env POOKA_NAME=dev3 POOKA_SSH_PUBKEY=ssh-ed25519 AAAA test /etc/pooka/firstboot.sh",
+	}
+	assertOrder(t, f.Calls, want)
+	if !strings.Contains(strings.Join(f.Calls, "\n"), "--cores 4 --memory 8192") {
+		t.Error("cores and memory not set")
+	}
+}
+
+func TestCreateRefusesDuplicateAndBadName(t *testing.T) {
+	b := newBackend(newFake())
+	if _, err := b.Create(context.Background(), "dev1", backend.CreateOptions{}); !errors.Is(err, backend.ErrExists) {
+		t.Errorf("want ErrExists, got %v", err)
+	}
+	for _, bad := range []string{"Dev", "a_b", "-x", "", strings.Repeat("a", 33)} {
+		if _, err := b.Create(context.Background(), bad, backend.CreateOptions{}); err == nil {
+			t.Errorf("name %q accepted", bad)
+		}
+	}
+}
+
+func TestCreateMissingTemplate(t *testing.T) {
+	f := newFake()
+	f.Rules = nil
+	f.On("pvesh get /cluster/resources", resourcesJSON)
+	f.OnExit("pct config 9000", 2, "Configuration file 'nodes/proxmox/lxc/9000.conf' does not exist")
+	_, err := newBackend(f).Create(context.Background(), "dev3", backend.CreateOptions{})
+	if err == nil || !strings.Contains(err.Error(), "build-template.sh") {
+		t.Errorf("want template hint, got %v", err)
+	}
+}
+
+func TestCreateReadyTimeout(t *testing.T) {
+	f := newFake()
+	f.Rules = append([]host.FakeRule{{Prefix: "lxc-attach -n 9102 --clear-env --keep-var TERM -- systemctl is-system-running", Stdout: "starting\n"}}, f.Rules...)
+	b := New(f, Options{Template: 9000, VMIDLow: 9100, VMIDHigh: 9199, ReadyWait: time.Millisecond, Sleep: func(time.Duration) {}})
+	_, err := b.Create(context.Background(), "dev3", backend.CreateOptions{})
+	if err == nil || !strings.Contains(err.Error(), "did not become ready") {
+		t.Errorf("want timeout, got %v", err)
+	}
+}
+
+func TestExecRunsAsPookaUser(t *testing.T) {
+	f := newFake()
+	var out bytes.Buffer
+	f.On("lxc-attach -n 9100 --clear-env --keep-var TERM -- runuser -l pooka -c", "hi\n")
+	code, err := newBackend(f).Exec(context.Background(), "dev1", []string{"echo", "hi there"}, backend.ExecOptions{Stdout: &out, Dir: "/work"})
+	if err != nil || code != 0 {
+		t.Fatal(code, err)
+	}
+	last := f.Calls[len(f.Calls)-1]
+	if last != "lxc-attach -n 9100 --clear-env --keep-var TERM -- runuser -l pooka -c cd /work && echo 'hi there'" {
+		t.Errorf("got %q", last)
+	}
+	if out.String() != "hi\n" {
+		t.Errorf("stdout %q", out.String())
+	}
+}
+
+func TestExecRefusesStopped(t *testing.T) {
+	_, err := newBackend(newFake()).Exec(context.Background(), "dev2", []string{"true"}, backend.ExecOptions{})
+	if err == nil || !strings.Contains(err.Error(), "pooka start dev2") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestRestoreClearsMMPOnLVMThin(t *testing.T) {
+	f := newFake()
+	if err := newBackend(f).Restore(context.Background(), "dev1", "cp-1"); err != nil {
+		t.Fatal(err)
+	}
+	assertOrder(t, f.Calls, []string{
+		"pct stop 9100",
+		"pct rollback 9100 cp-1",
+		"pvesm path local-lvm:vm-9100-disk-0",
+		"tune2fs -f -E clear_mmp /dev/pve/vm-9100-disk-0",
+		"pct start 9100",
+	})
+}
+
+func TestRestoreSkipsMMPOnZFS(t *testing.T) {
+	f := newFake()
+	f.Rules = append([]host.FakeRule{
+		{Prefix: "pct config", Stdout: "rootfs: tank:subvol-9101-disk-0,size=16G\n"},
+		{Prefix: "pvesh get /storage/tank", Stdout: `{"type":"zfspool"}`},
+	}, f.Rules...)
+	if err := newBackend(f).Restore(context.Background(), "dev2", "cp-1"); err != nil {
+		t.Fatal(err)
+	}
+	if f.Called("tune2fs") {
+		t.Error("tune2fs must not run on zfs")
+	}
+	if f.Called("pct stop") {
+		t.Error("stopped env must not be stopped again")
+	}
+}
+
+func TestStopUsesShutdownWithForce(t *testing.T) {
+	f := newFake()
+	if err := newBackend(f).Stop(context.Background(), "dev1"); err != nil {
+		t.Fatal(err)
+	}
+	if !f.Called("pct shutdown 9100 --timeout 10 --forceStop 1") {
+		t.Errorf("calls: %v", f.Calls)
+	}
+}
+
+func TestDestroyStopsThenPurges(t *testing.T) {
+	f := newFake()
+	if err := newBackend(f).Destroy(context.Background(), "dev1"); err != nil {
+		t.Fatal(err)
+	}
+	assertOrder(t, f.Calls, []string{"pct stop 9100", "pct destroy 9100 --purge"})
+}
+
+func TestListCheckpointsSkipsCurrent(t *testing.T) {
+	f := newFake()
+	f.On("pvesh get /nodes/proxmox/lxc/9100/snapshot", `[{"name":"cp-1700000000","snaptime":1700000000,"description":"before upgrade\n"},{"name":"current","description":"You are here!"}]`)
+	cps, err := newBackend(f).ListCheckpoints(context.Background(), "dev1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cps) != 1 || cps[0].ID != "cp-1700000000" || cps[0].Comment != "before upgrade" {
+		t.Errorf("got %+v", cps)
+	}
+}
+
+func TestPctErrorCarriesStderr(t *testing.T) {
+	f := newFake()
+	f.Rules = append([]host.FakeRule{{Prefix: "pct start 9101", Exit: 255, Stderr: "CT is locked (snapshot)"}}, f.Rules...)
+	err := newBackend(f).Start(context.Background(), "dev2")
+	if err == nil || !strings.Contains(err.Error(), "CT is locked") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestLiveStatusOverridesStaleResources(t *testing.T) {
+	f := newFake()
+	// resources says dev1 running; pct says stopped (just stopped, pvestatd lags).
+	f.Rules = append([]host.FakeRule{
+		{Prefix: "pct list", Stdout: "VMID Status Lock Name\n9100 stopped  dev1\n9101 stopped  dev2\n"},
+		{Prefix: "pct status 9100", Stdout: "status: stopped\n"},
+	}, f.Rules...)
+	b := newBackend(f)
+	envs, _ := b.List(context.Background())
+	if envs[0].Status != "stopped" {
+		t.Errorf("List: %+v", envs[0])
+	}
+	if err := b.Start(context.Background(), "dev1"); err != nil {
+		t.Fatal(err)
+	}
+	if !f.Called("pct start 9100") {
+		t.Error("Start must act on live status, not the stale resources status")
+	}
+}
+
+func TestParseRootfs(t *testing.T) {
+	v, s := parseRootfs("arch: amd64\nrootfs: local-lvm:vm-9100-disk-0,size=16G\n")
+	if v != "local-lvm:vm-9100-disk-0" || s != 16 {
+		t.Errorf("got %q %d", v, s)
+	}
+}
+
+// assertOrder checks that each want[i] appears as a prefix of some call, in order.
+func assertOrder(t *testing.T, calls, want []string) {
+	t.Helper()
+	i := 0
+	for _, c := range calls {
+		if i < len(want) && strings.HasPrefix(c, want[i]) {
+			i++
+		}
+	}
+	if i != len(want) {
+		t.Errorf("missing %q in order.\ncalls:\n  %s", want[i], strings.Join(calls, "\n  "))
+	}
+}

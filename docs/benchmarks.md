@@ -53,3 +53,19 @@ and do not have this problem.
 
 Start (2.0 s) and waiting for systemd (2.2 s) dominate. Candidates to cut later: trim
 template services, mask units that are not needed in a container, shrink firstboot.
+
+## 2026-10-20, first end-to-end run of the Go CLI
+
+`pooka create` measured 33.5 s with `POOKA_DEBUG=1`. Breakdown:
+
+| Step | Time | Note |
+|---|---|---|
+| `pct resize rootfs 32G` | 23.4 s | template was 16 GB. Fix: build template at 32 GB, skip resize. |
+| each `pct` call | 0.55 s | perl startup. SSH itself is 0.01 s with multiplexing. |
+| `pct exec` vs `lxc-attach` | 0.57 s vs 0.007 s | exec, firstboot and the ready wait now use lxc-attach. |
+| `pct clone` | 1.2 s | |
+| `pct start` | 2.0 s | |
+
+After the template rebuild at 32 GB: `pooka create` 8.7 s end to end (resources 0.9,
+config 0.6, clone 1.2, set 0.6, config 0.6, start 2.0, systemd ready wait 2.5, firstboot
+0.5). Remaining fat: the four `pct` calls at 0.55 s each, and the systemd wait.

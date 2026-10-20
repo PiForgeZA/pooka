@@ -5,8 +5,9 @@
 node = "22"
 python = "3.13"
 go = "1.27"
-"npm:@anthropic-ai/claude-code" = "latest"
 "npm:@openai/codex" = "latest"
+# Claude Code is installed by its native installer in provision.sh, because the npm
+# package needs a postinstall step that the mise npm backend skips.
 herdr = "latest"
 
 [settings]

@@ -54,6 +54,10 @@ echo "== tools via mise (as pooka)"
 sudo -iu pooka mise install --yes
 sudo -iu pooka mise ls
 
+echo "== claude code (native installer, as pooka)"
+sudo -iu pooka bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
+sudo -iu pooka bash -lc 'claude --version'
+
 echo "== tidy"
 rm -rf /root/.npm /root/.cache /home/pooka/.npm /home/pooka/.cache
 echo "provisioned $(date -Is)" >/etc/pooka/provisioned

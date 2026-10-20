@@ -103,7 +103,8 @@ A `.pooka` file in the current directory can name the active environment. The co
    linked clone.
 5. Set cores, memory and the `pooka` tag. Set the description to a JSON object with the
    pooka version, the creation time and the template ID.
-6. Resize the root disk to `disk_gb` if the template is smaller.
+6. Resize the root disk to `disk_gb` if the template is smaller. A resize costs about
+   23 s, so build the template at `disk_gb` (default 32 GB, thin) and this step is a no-op.
 7. Run `pct start <vmid>`.
 8. Wait until `pct exec <vmid> -- systemctl is-system-running` returns `running` or
    `degraded`. Time out after 30 seconds.
@@ -123,8 +124,8 @@ Each command maps to `pct` calls on the host over SSH. The table gives the mappi
 |---|---|
 | `pooka create <name>` | Section 9. |
 | `pooka ls` | `pct list`, filtered by the `pooka` tag. Show name, VMID, status, IP. |
-| `pooka exec <name> -- <cmd...>` | `pct exec <vmid> -- runuser -l pooka -c '<cmd...>'`. Add `-t` for a TTY. `--root` runs as root. |
-| `pooka console <name>` | `ssh -t host pct exec <vmid> -- su - pooka`. |
+| `pooka exec <name> -- <cmd...>` | `lxc-attach -n <vmid> --clear-env -- runuser -l pooka -c '<cmd...>'`. Add `-t` for a TTY. `--root` runs as root. `lxc-attach` is what `pct exec` wraps, without 0.5 s of perl startup per call. |
+| `pooka console <name>` | `exec` of `bash -l` with a TTY. |
 | `pooka push <name> <local> <remote>` | `scp` to host, then `pct push`. |
 | `pooka pull <name> <remote> <local>` | `pct pull`, then `scp` from host. |
 | `pooka checkpoint <name> [--comment c]` | `pct snapshot <vmid> cp-<unix-time> --description c`. |
@@ -151,9 +152,11 @@ only source of truth.
 
 ## 12. Transport
 
-Phase 1 runs `pct` over SSH. The CLI opens one SSH connection per command. It uses the
-system `ssh` binary so existing keys, agents and config work. Put this behind an
-interface named `Host` with one method: `Run(ctx, args, stdin, stdout, stderr)`.
+Phase 1 runs `pct` over SSH. The CLI uses the system `ssh` binary so existing keys,
+agents and config work. It enables SSH connection multiplexing (`ControlMaster`) so one
+handshake serves every call in a command. Put this behind an interface named `Host`
+with `Run(ctx, cmd)`, `CopyTo` and `CopyFrom`. Set `POOKA_DEBUG=1` to log every host
+call with its duration.
 
 Phase 2 replaces this with an HTTP client to a daemon on the host. Commands must not
 depend on SSH details.

@@ -18,8 +18,12 @@ if [ -n "${POOKA_SSH_PUBKEY:-}" ]; then
   printf '%s\n' "$POOKA_SSH_PUBKEY" >>/home/pooka/.ssh/authorized_keys
   chmod 0600 /home/pooka/.ssh/authorized_keys
   chown pooka:pooka /home/pooka/.ssh/authorized_keys
-  systemctl restart ssh >/dev/null 2>&1 || true
 fi
+
+# sshd failed at boot because host keys were generated above, after it started.
+# systemd rate-limits restarts, so clear the failed state first.
+systemctl reset-failed ssh >/dev/null 2>&1 || true
+systemctl restart ssh >/dev/null 2>&1 || true
 
 # Per-environment git identity, if provided.
 if [ -n "${GIT_USER_NAME:-}" ]; then

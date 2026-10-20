@@ -8,7 +8,7 @@ VMID="${POOKA_TEMPLATE_VMID:-9000}"
 STORAGE="${POOKA_STORAGE:-local-lvm}"
 BRIDGE="${POOKA_BRIDGE:-vmbr0}"
 OSTEMPLATE="${POOKA_OSTEMPLATE:-local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst}"
-DISK_GB="${POOKA_TEMPLATE_DISK_GB:-16}"
+DISK_GB="${POOKA_TEMPLATE_DISK_GB:-32}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 log() { printf '\n==> %s\n' "$*"; }
