@@ -17,4 +17,5 @@ Sections: State, Facts needed to continue, Next steps in order, Suggested skills
 
 | Handoff | Focus |
 |---|---|
-| [0001](0001-project-bootstrap.md) | Publish repo, build template, scaffold CLI |
+| [0001](0001-project-bootstrap.md) | Publish repo, build template, scaffold CLI (done, v0.1.0) |
+| [0002](0002-phase-2-daemon.md) | Phase 2: host daemon with the Sprites HTTP API |

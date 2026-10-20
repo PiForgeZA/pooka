@@ -31,7 +31,7 @@ ADR index before you make a design decision, and write a new ADR when you make o
 SPEC.md                 # phase 1 specification
 docs/
   research.md           # the investigation behind the design
-  benchmarks.md         # measured numbers on the real host (to be created)
+  benchmarks.md         # measured numbers on the real host
   adr/
     README.md           # index of every ADR and its status
     0001-*.md
