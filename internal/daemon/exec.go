@@ -291,7 +291,9 @@ func (s *Server) execWS(w http.ResponseWriter, r *http.Request) {
 	}
 	writeText(map[string]any{"type": "session_info", "session_id": ss.ID, "command": ss.Command, "created": ss.Created.Unix(), "cols": p.size.Cols, "rows": p.size.Rows, "is_owner": true, "tty": p.tty})
 
-	// Reader: client frames in, until the socket closes or the command ends.
+	// Reader: client frames in, until the socket closes or the command ends. Stdin
+	// EOF only closes the pipe; the loop keeps reading so a later disconnect still
+	// cancels the command and resizes still arrive.
 	go func() {
 		defer stdinW.Close()
 		for {
@@ -307,11 +309,9 @@ func (s *Server) execWS(w http.ResponseWriter, r *http.Request) {
 				}
 				switch data[0] {
 				case frameStdin:
-					if _, err := stdinW.Write(data[1:]); err != nil {
-						return
-					}
+					_, _ = stdinW.Write(data[1:]) // fails once stdin is closed; drop it
 				case frameStdinEOF:
-					return
+					_ = stdinW.Close()
 				}
 			case websocket.MessageText:
 				var msg struct {

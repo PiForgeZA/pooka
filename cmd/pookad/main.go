@@ -97,7 +97,7 @@ func main() {
 	s := daemon.New(b, token)
 	s.Org, s.Version, s.Create = cfg.Org, Version, create
 
-	srv := &http.Server{Addr: cfg.Listen, Handler: logRequests(s.Handler()), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: cfg.Listen, Handler: daemon.LogRequests(log.Default(), s.Handler()), ReadHeaderTimeout: 10 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
@@ -110,14 +110,4 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
-}
-
-func logRequests(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		next.ServeHTTP(w, r)
-		if r.URL.Path != "/healthz" {
-			log.Printf("%s %s %s %s", r.RemoteAddr, r.Method, r.URL.RequestURI(), time.Since(start).Round(time.Millisecond))
-		}
-	})
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -369,5 +370,55 @@ func TestExecRootOnlyViaExtension(t *testing.T) {
 	}
 	if len(fb.Root) != 2 || !fb.Root[0] || fb.Root[1] {
 		t.Errorf("root must apply on /pooka/v1 only: %v", fb.Root)
+	}
+}
+
+// After stdin EOF the daemon must still notice the client going away and stop the
+// command. Otherwise a silent long-running command outlives its session.
+func TestExecWebSocketDisconnectAfterStdinEOF(t *testing.T) {
+	fb := backendtest.New()
+	s := New(fb, "secret")
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	url := "ws" + strings.TrimPrefix(ts.URL, "http") + "/v1/sprites/dev1/exec?cmd=sleep&stdin=true"
+	c, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer secret"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Read(ctx); err != nil { // session_info
+		t.Fatal(err)
+	}
+	c.Write(ctx, websocket.MessageBinary, []byte{frameStdinEOF})
+	time.Sleep(100 * time.Millisecond) // let the server process the EOF first
+	c.CloseNow()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		s.mu.Lock()
+		n := len(s.sessions)
+		s.mu.Unlock()
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("session still alive after the client disconnected")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestLogRequestsOmitsQuery(t *testing.T) {
+	var buf bytes.Buffer
+	h := LogRequests(log.New(&buf, "", 0), http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) }))
+	req := httptest.NewRequest("GET", "/v1/sprites/dev1/exec?cmd=env&env=SECRET%3Dhunter2&token=tok123", nil)
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if got := buf.String(); !strings.Contains(got, "GET /v1/sprites/dev1/exec") || strings.Contains(got, "hunter2") || strings.Contains(got, "tok123") {
+		t.Errorf("log line: %q", got)
+	}
+	buf.Reset()
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/healthz", nil))
+	if buf.Len() != 0 {
+		t.Errorf("healthz must not be logged: %q", buf.String())
 	}
 }

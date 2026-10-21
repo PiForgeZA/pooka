@@ -26,9 +26,38 @@ func (Local) Run(ctx context.Context, cmd Cmd) (int, error) {
 	case cmd.TTY:
 		c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	default:
-		c.Stdin, c.Stdout, c.Stderr = cmd.Stdin, cmd.Stdout, cmd.Stderr
+		c.Stdout, c.Stderr = cmd.Stdout, cmd.Stderr
+		if cmd.Stdin != nil {
+			closeStdin, err := detachedStdin(c, cmd.Stdin)
+			if err != nil {
+				return -1, err
+			}
+			defer closeStdin()
+		}
 	}
 	return exitCode(c.Run())
+}
+
+// detachedStdin feeds r to the command through an OS pipe that we own. With a
+// plain io.Reader, exec.Cmd copies it in a goroutine and Wait blocks until that
+// copy ends; a reader that never reaches EOF, such as a terminal or a WebSocket
+// stdin stream, would then keep Wait from returning after the process exited.
+// The copier is left running; the returned func closes the write end so it ends
+// on its next write.
+func detachedStdin(c *exec.Cmd, r io.Reader) (func(), error) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	c.Stdin = pr
+	go func() {
+		_, _ = io.Copy(pw, r)
+		pw.Close()
+	}()
+	return func() {
+		pr.Close()
+		pw.Close()
+	}, nil
 }
 
 func runPTY(c *exec.Cmd, cmd Cmd) (int, error) {

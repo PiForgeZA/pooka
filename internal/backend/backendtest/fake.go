@@ -92,7 +92,7 @@ func (f *Fake) Destroy(_ context.Context, name string) error {
 	return nil
 }
 
-func (f *Fake) Exec(_ context.Context, name string, cmd []string, o backend.ExecOptions) (int, error) {
+func (f *Fake) Exec(ctx context.Context, name string, cmd []string, o backend.ExecOptions) (int, error) {
 	if _, ok := f.Envs[name]; !ok {
 		return -1, backend.ErrNotFound
 	}
@@ -100,6 +100,10 @@ func (f *Fake) Exec(_ context.Context, name string, cmd []string, o backend.Exec
 	f.Root = append(f.Root, o.Root)
 	if cmd[0] == "exit" {
 		return 7, nil
+	}
+	if cmd[0] == "sleep" { // runs until the context ends, like a long-lived process
+		<-ctx.Done()
+		return 130, nil
 	}
 	var in []byte
 	if o.Stdin != nil {

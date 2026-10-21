@@ -3,6 +3,7 @@ package host
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -66,3 +67,23 @@ var errEOF = eof{}
 type eof struct{}
 
 func (eof) Error() string { return "EOF" }
+
+// A stdin that never ends must not keep Run from returning once the process exits.
+func TestLocalRunDoesNotWaitForStdinEOF(t *testing.T) {
+	pr, _ := io.Pipe() // nothing ever writes or closes
+	done := make(chan struct{})
+	var code int
+	var err error
+	go func() {
+		code, err = Local{}.Run(context.Background(), Cmd{Args: []string{"true"}, Stdin: pr, Stdout: io.Discard, Stderr: io.Discard})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run waited for stdin EOF after the process exited")
+	}
+	if err != nil || code != 0 {
+		t.Errorf("code=%d err=%v", code, err)
+	}
+}
