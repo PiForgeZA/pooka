@@ -73,7 +73,8 @@ Query parameters on the exec path: `cmd` (repeated), `path`, `stdin`, `tty`, `en
 | `POST .../exec` | yes | `Backend.Exec`, stdout and stderr concatenated |
 | `GET .../exec` (JSON list), `.../exec/{id}/kill` | yes, in-memory sessions | daemon |
 | `GET .../fs/read`, `PUT .../fs/write`, `GET .../fs/list` | yes | `Backend.Exec` as root |
-| `fs/chmod`, `chown`, `copy`, `delete`, `rename` | later | |
+| `POST .../fs/chown` | yes; `uid` and `gid` take a number or a name | `Backend.Exec` as root |
+| `fs/chmod`, `copy`, `delete`, `rename` | later | |
 | `policy/*`, `services/*`, `oauth/*` | 501 | phases 3 and 4 |
 | WebSocket `proxy`, `control`, `ports/watch`, `fs/watch`, `exec/{id}` attach | later | |
 
@@ -86,6 +87,38 @@ attaches to a session by id before sending a command. pooka keeps no attachable
 sessions yet and answers 404 with a hint to use `--stdin` or `--http-post`. How the CLI
 expects that session to come into being is not described by the public specs or the
 SDK, so pooka does not guess.
+
+## pooka extensions
+
+The `pooka` CLI needs four operations the Sprites spec does not define. They live
+under `/pooka/v1` so they can never collide with a future Sprites path (ADR 0005).
+They use the same bearer token. The official `sprite` CLI never calls them.
+
+| Endpoint | Body | Response |
+|---|---|---|
+| `POST /pooka/v1/sprites` | `{"name","cores","memory_mb","disk_gb","ssh_pubkey"}`; a zero or empty value means the daemon default | 201, SpriteResponse |
+| `POST /pooka/v1/sprites/{name}/start` | none | 204 |
+| `POST /pooka/v1/sprites/{name}/stop` | none | 204 |
+| `DELETE /pooka/v1/sprites/{name}/checkpoints/{id}` | none | 204 |
+
+Errors use the same `{"error": "..."}` shape and codes as the Sprites endpoints:
+400, 401, 404, 409, 500.
+
+How the `pooka` CLI maps onto the API (internal/backend/httpapi):
+
+| `pooka` command | Request |
+|---|---|
+| `ls`, `use` | `GET /v1/sprites`, `GET /v1/sprites/{name}` |
+| `create` | `POST /pooka/v1/sprites` |
+| `start`, `stop` | pooka extensions |
+| `destroy` | `DELETE /v1/sprites/{name}` |
+| `exec`, `console` | WebSocket exec; `--root` prepends `sudo -n --` |
+| `push` | `PUT .../fs/write`, then `POST .../fs/chown` to `pooka:pooka` |
+| `pull` | `GET .../fs/read` |
+| `checkpoint` | `POST .../checkpoint` stream, then `GET .../checkpoints` for the id |
+| `checkpoint ls` | `GET .../checkpoints`, reversed to oldest first |
+| `checkpoint rm` | pooka extension |
+| `restore` | `POST .../checkpoints/{id}/restore` stream |
 
 Status mapping: a running container reports `running`; a stopped one reports `cold`.
 pooka has no `warm` state in phase 2. The `url` field is `http://<ip>:8080` while running

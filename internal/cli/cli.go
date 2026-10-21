@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/PiForgeZA/pooka/internal/backend"
+	"github.com/PiForgeZA/pooka/internal/backend/httpapi"
 	"github.com/PiForgeZA/pooka/internal/backend/lxc"
 	"github.com/PiForgeZA/pooka/internal/config"
 	"github.com/PiForgeZA/pooka/internal/host"
@@ -25,27 +26,72 @@ var Version = "dev"
 
 // App holds what commands need. Tests inject a fake backend.
 type App struct {
-	Cfg     config.Config
+	Cfg config.Config
+	// Backend is nil until the root command's PersistentPreRun opens one with Open.
+	// Tests set it directly.
 	Backend backend.Backend
-	In      io.Reader
-	Out     io.Writer
-	Err     io.Writer
+	// Open returns the backend for a transport, "ssh" or "daemon".
+	Open func(transport string) (backend.Backend, error)
+	// Transport is the one in use, set before a command runs.
+	Transport string
+	In        io.Reader
+	Out       io.Writer
+	Err       io.Writer
 	// ActiveEnv returns the name from ./.pooka. Tests override it.
 	ActiveEnv func() string
 }
 
-// NewApp wires the real config, SSH host and LXC backend.
+// NewApp wires the real config and the backend opener.
 func NewApp() (*App, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, err
 	}
-	var h host.Host = host.NewSSH(cfg.Host)
-	if os.Getenv("POOKA_DEBUG") != "" {
-		h = host.Logged{Host: h, Out: os.Stderr}
+	a := &App{Cfg: cfg, In: os.Stdin, Out: os.Stdout, Err: os.Stderr, ActiveEnv: config.ActiveEnv}
+	a.Open = func(t string) (backend.Backend, error) { return openBackend(cfg, t) }
+	return a, nil
+}
+
+// openBackend builds the SSH+LXC backend or the HTTP client. ADR 0005.
+func openBackend(cfg config.Config, transport string) (backend.Backend, error) {
+	debug := os.Getenv("POOKA_DEBUG") != ""
+	switch transport {
+	case "ssh":
+		var h host.Host = host.NewSSH(cfg.Host)
+		if debug {
+			h = host.Logged{Host: h, Out: os.Stderr}
+		}
+		return lxc.New(h, lxc.Options{Template: cfg.Template, VMIDLow: cfg.VMIDRange[0], VMIDHigh: cfg.VMIDRange[1], Version: Version}), nil
+	case "daemon":
+		if cfg.DaemonURL == "" {
+			return nil, fmt.Errorf("no daemon configured: set daemon_url in %s or export SPRITES_API_URL, or use --transport ssh", config.Path())
+		}
+		tok, err := cfg.DaemonToken()
+		if err != nil {
+			return nil, err
+		}
+		c := httpapi.New(cfg.DaemonURL, tok)
+		c.UserAgent = "pooka/" + Version
+		c.Progress = os.Stderr
+		if debug {
+			c.Debug = os.Stderr
+		}
+		return c, nil
+	default:
+		return nil, fmt.Errorf("unknown transport %q: use ssh or daemon", transport)
 	}
-	b := lxc.New(h, lxc.Options{Template: cfg.Template, VMIDLow: cfg.VMIDRange[0], VMIDHigh: cfg.VMIDRange[1], Version: Version})
-	return &App{Cfg: cfg, Backend: b, In: os.Stdin, Out: os.Stdout, Err: os.Stderr, ActiveEnv: config.ActiveEnv}, nil
+}
+
+// transport picks the transport from --transport, else from the config: daemon when
+// daemon_url is set, otherwise ssh.
+func (a *App) transport(cmd *cobra.Command) string {
+	if t, _ := cmd.Flags().GetString("transport"); t != "" {
+		return t
+	}
+	if a.Cfg.DaemonURL != "" {
+		return "daemon"
+	}
+	return "ssh"
 }
 
 // Root builds the command tree.
@@ -60,6 +106,22 @@ func (a *App) Root() *cobra.Command {
 	root.SetIn(a.In)
 	root.SetOut(a.Out)
 	root.SetErr(a.Err)
+	root.PersistentFlags().String("transport", "", "ssh or daemon (default: daemon when daemon_url is set, else ssh)")
+	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
+		a.Transport = a.transport(cmd)
+		if a.Backend != nil {
+			return nil
+		}
+		if a.Open == nil {
+			return errors.New("no backend configured")
+		}
+		b, err := a.Open(a.Transport)
+		if err != nil {
+			return err
+		}
+		a.Backend = b
+		return nil
+	}
 	root.AddCommand(
 		a.createCmd(), a.lsCmd(), a.execCmd(), a.consoleCmd(),
 		a.pushCmd(), a.pullCmd(),
@@ -135,6 +197,19 @@ func (a *App) createCmd() *cobra.Command {
 			cores, _ := cmd.Flags().GetInt("cores")
 			mem, _ := cmd.Flags().GetInt("memory")
 			disk, _ := cmd.Flags().GetInt("disk")
+			if a.Transport == "daemon" {
+				// Over the daemon, a flag the user did not set means "the daemon's
+				// default", not the local config value. ADR 0005.
+				if !cmd.Flags().Changed("cores") {
+					cores = 0
+				}
+				if !cmd.Flags().Changed("memory") {
+					mem = 0
+				}
+				if !cmd.Flags().Changed("disk") {
+					disk = 0
+				}
+			}
 			start := time.Now()
 			env, err := a.Backend.Create(cmd.Context(), args[0], backend.CreateOptions{Cores: cores, MemoryMB: mem, DiskGB: disk, SSHPubKey: key})
 			if err != nil {
@@ -148,9 +223,9 @@ func (a *App) createCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().Int("cores", a.Cfg.Cores, "CPU cores")
-	c.Flags().Int("memory", a.Cfg.MemoryMB, "memory in MiB")
-	c.Flags().Int("disk", a.Cfg.DiskGB, "root disk size in GiB (thin)")
+	c.Flags().Int("cores", a.Cfg.Cores, "CPU cores (over the daemon: its default unless set)")
+	c.Flags().Int("memory", a.Cfg.MemoryMB, "memory in MiB (over the daemon: its default unless set)")
+	c.Flags().Int("disk", a.Cfg.DiskGB, "root disk size in GiB, thin (over the daemon: its default unless set)")
 	return c
 }
 

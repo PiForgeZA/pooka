@@ -22,6 +22,11 @@ type Config struct {
 	Cores     int    `yaml:"cores"`
 	MemoryMB  int    `yaml:"memory_mb"`
 	SSHPubKey string `yaml:"ssh_pubkey"`
+	// Daemon transport (ADR 0005). If DaemonURL is set, the CLI uses pookad over
+	// HTTP. SPRITES_API_URL and SPRITE_TOKEN override these.
+	DaemonURL string `yaml:"daemon_url"`
+	Token     string `yaml:"token"`
+	TokenFile string `yaml:"token_file"`
 }
 
 // Default returns the built-in defaults.
@@ -51,20 +56,55 @@ func Path() string {
 	return filepath.Join(dir, "pooka", "config.yaml")
 }
 
-// Load reads the config file over the defaults. A missing file is not an error.
+// Load reads the config file over the defaults, then the environment overrides.
+// A missing file is not an error.
 func Load() (Config, error) {
 	c := Default()
 	b, err := os.ReadFile(Path())
-	if errors.Is(err, os.ErrNotExist) {
-		return c, nil
-	}
-	if err != nil {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
 		return c, err
+	default:
+		if err := yaml.Unmarshal(b, &c); err != nil {
+			return c, fmt.Errorf("parse %s: %w", Path(), err)
+		}
 	}
-	if err := yaml.Unmarshal(b, &c); err != nil {
-		return c, fmt.Errorf("parse %s: %w", Path(), err)
-	}
+	c.applyEnv()
 	return c, c.validate()
+}
+
+// applyEnv honours the variables the official sprite CLI uses, so one shell serves
+// both CLIs.
+func (c *Config) applyEnv() {
+	if v := os.Getenv("SPRITES_API_URL"); v != "" {
+		c.DaemonURL = v
+	}
+	for _, k := range []string{"SPRITE_TOKEN", "SPRITE_API_TOKEN"} {
+		if v := os.Getenv(k); v != "" {
+			c.Token = v
+			return
+		}
+	}
+}
+
+// DaemonToken returns token, or the contents of token_file.
+func (c Config) DaemonToken() (string, error) {
+	if c.Token != "" {
+		return c.Token, nil
+	}
+	if c.TokenFile == "" {
+		return "", fmt.Errorf("config: daemon_url is set but token and token_file are not; set one in %s or export SPRITE_TOKEN", Path())
+	}
+	b, err := os.ReadFile(ExpandHome(c.TokenFile))
+	if err != nil {
+		return "", fmt.Errorf("config: token_file: %w", err)
+	}
+	tok := strings.TrimSpace(string(b))
+	if tok == "" {
+		return "", fmt.Errorf("config: token_file %s is empty", c.TokenFile)
+	}
+	return tok, nil
 }
 
 func (c Config) validate() error {

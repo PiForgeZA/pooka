@@ -57,6 +57,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/sprites/{name}/fs/read", s.fsRead)
 	mux.HandleFunc("PUT /v1/sprites/{name}/fs/write", s.fsWrite)
 	mux.HandleFunc("GET /v1/sprites/{name}/fs/list", s.fsList)
+	mux.HandleFunc("POST /v1/sprites/{name}/fs/chown", s.fsChown)
+
+	s.pookaRoutes(mux)
 
 	mux.HandleFunc("/v1/", s.notImplemented)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {

@@ -2,9 +2,12 @@ package daemon
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -149,6 +152,75 @@ func parseFind(dir, out string) []fsEntry {
 		})
 	}
 	return entries
+}
+
+// owner is a uid or gid in a ChownRequest. The spec types it as an object; the
+// SDKs send a number. pooka also accepts a user or group name.
+type owner string
+
+func (o *owner) UnmarshalJSON(b []byte) error {
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	switch t := v.(type) {
+	case nil:
+		*o = ""
+	case float64:
+		*o = owner(strconv.FormatInt(int64(t), 10))
+	case string:
+		*o = owner(t)
+	default:
+		return errors.New("uid and gid must be a number or a name")
+	}
+	return nil
+}
+
+var ownerRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]*$|^[0-9]+$`)
+
+func (s *Server) fsChown(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path       string `json:"path"`
+		WorkingDir string `json:"workingDir"`
+		UID        owner  `json:"uid"`
+		GID        owner  `json:"gid"`
+		Recursive  bool   `json:"recursive"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if req.Path == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if req.UID == "" && req.GID == "" {
+		writeError(w, http.StatusBadRequest, "uid or gid is required")
+		return
+	}
+	for _, o := range []owner{req.UID, req.GID} {
+		if o != "" && !ownerRe.MatchString(string(o)) {
+			writeError(w, http.StatusBadRequest, "invalid uid or gid: "+string(o))
+			return
+		}
+	}
+	p := resolve(req.Path, req.WorkingDir)
+	args := []string{"chown"}
+	if req.Recursive {
+		args = append(args, "-R")
+	}
+	args = append(args, string(req.UID)+":"+string(req.GID), p)
+	var errb bytes.Buffer
+	code, err := s.Backend.Exec(r.Context(), r.PathValue("name"), args, backend.ExecOptions{Stdout: io.Discard, Stderr: &errb, Root: true})
+	if err != nil {
+		writeBackendError(w, err)
+		return
+	}
+	if code != 0 {
+		writeError(w, http.StatusNotFound, strings.TrimSpace(errb.String()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"affected": []map[string]string{{"path": p}}, "count": 1})
 }
 
 // quoteForTest exists so the shell snippets above can be unit tested for quoting.

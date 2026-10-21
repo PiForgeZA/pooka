@@ -14,103 +14,12 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/PiForgeZA/pooka/internal/backend"
+	"github.com/PiForgeZA/pooka/internal/backend/backendtest"
 )
 
-// fakeBackend is an in-memory Backend. Exec echoes stdin, prints args, honours env.
-type fakeBackend struct {
-	envs  map[string]backend.Env
-	cps   map[string][]backend.Checkpoint
-	calls []string
-}
-
-func newFakeBackend() *fakeBackend {
-	return &fakeBackend{
-		envs: map[string]backend.Env{
-			"dev1": {Name: "dev1", VMID: 9100, Status: "running", IP: "10.0.0.5", Created: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)},
-			"dev2": {Name: "dev2", VMID: 9101, Status: "stopped"},
-		},
-		cps: map[string][]backend.Checkpoint{"dev1": {{ID: "cp-1", Time: time.Unix(1700000000, 0), Comment: "first"}}},
-	}
-}
-
-func (f *fakeBackend) Create(_ context.Context, name string, _ backend.CreateOptions) (backend.Env, error) {
-	if err := backend.ValidateName(name); err != nil {
-		return backend.Env{}, err
-	}
-	if _, ok := f.envs[name]; ok {
-		return backend.Env{}, backend.ErrExists
-	}
-	e := backend.Env{Name: name, VMID: 9102, Status: "running", IP: "10.0.0.7", Created: time.Now()}
-	f.envs[name] = e
-	return e, nil
-}
-func (f *fakeBackend) List(context.Context) ([]backend.Env, error) {
-	out := []backend.Env{}
-	for _, n := range []string{"dev1", "dev2", "dev3"} {
-		if e, ok := f.envs[n]; ok {
-			out = append(out, e)
-		}
-	}
-	return out, nil
-}
-func (f *fakeBackend) Get(_ context.Context, name string) (backend.Env, error) {
-	e, ok := f.envs[name]
-	if !ok {
-		return backend.Env{}, backend.ErrNotFound
-	}
-	return e, nil
-}
-func (f *fakeBackend) Start(context.Context, string) error { return nil }
-func (f *fakeBackend) Stop(context.Context, string) error  { return nil }
-func (f *fakeBackend) Destroy(_ context.Context, name string) error {
-	if _, ok := f.envs[name]; !ok {
-		return backend.ErrNotFound
-	}
-	delete(f.envs, name)
-	return nil
-}
-func (f *fakeBackend) Exec(_ context.Context, name string, cmd []string, o backend.ExecOptions) (int, error) {
-	if _, ok := f.envs[name]; !ok {
-		return -1, backend.ErrNotFound
-	}
-	f.calls = append(f.calls, strings.Join(cmd, " "))
-	if cmd[0] == "exit" {
-		return 7, nil
-	}
-	if o.Stdin != nil {
-		in, _ := io.ReadAll(o.Stdin)
-		if len(in) > 0 {
-			io.WriteString(o.Stdout, "stdin:"+string(in)+"\n")
-		}
-	}
-	io.WriteString(o.Stdout, "cmd:"+strings.Join(cmd, " ")+"\n")
-	if len(o.Env) > 0 {
-		io.WriteString(o.Stdout, "env:"+strings.Join(o.Env, ",")+"\n")
-	}
-	if o.Stderr != nil {
-		io.WriteString(o.Stderr, "err\n")
-	}
-	return 0, nil
-}
-func (f *fakeBackend) Push(context.Context, string, string, string) error { return nil }
-func (f *fakeBackend) Pull(context.Context, string, string, string) error { return nil }
-func (f *fakeBackend) Checkpoint(_ context.Context, name, comment string) (backend.Checkpoint, error) {
-	cp := backend.Checkpoint{ID: "cp-2", Time: time.Now(), Comment: comment}
-	f.cps[name] = append(f.cps[name], cp)
-	return cp, nil
-}
-func (f *fakeBackend) ListCheckpoints(_ context.Context, name string) ([]backend.Checkpoint, error) {
-	return f.cps[name], nil
-}
-func (f *fakeBackend) DeleteCheckpoint(context.Context, string, string) error { return nil }
-func (f *fakeBackend) Restore(_ context.Context, name, id string) error {
-	f.calls = append(f.calls, "restore "+name+" "+id)
-	return nil
-}
-
-func newTestServer(t *testing.T) (*httptest.Server, *fakeBackend) {
+func newTestServer(t *testing.T) (*httptest.Server, *backendtest.Fake) {
 	t.Helper()
-	fb := newFakeBackend()
+	fb := backendtest.New()
 	s := New(fb, "secret")
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
@@ -188,7 +97,7 @@ func TestCreateAndDelete(t *testing.T) {
 	if resp, _ := do(t, ts, "DELETE", "/v1/sprites/dev3", nil, "secret"); resp.StatusCode != 204 {
 		t.Errorf("delete: %d", resp.StatusCode)
 	}
-	if _, ok := fb.envs["dev3"]; ok {
+	if _, ok := fb.Envs["dev3"]; ok {
 		t.Error("dev3 still exists")
 	}
 }
@@ -205,8 +114,8 @@ func TestCheckpointStreamAndList(t *testing.T) {
 	if last.Type != "complete" || !strings.Contains(last.Data, "cp-2") {
 		t.Errorf("stream: %s", b)
 	}
-	if fb.cps["dev1"][1].Comment != "hello" {
-		t.Errorf("comment not passed: %+v", fb.cps["dev1"])
+	if fb.Cps["dev1"][1].Comment != "hello" {
+		t.Errorf("comment not passed: %+v", fb.Cps["dev1"])
 	}
 
 	resp, b = do(t, ts, "GET", "/v1/sprites/dev1/checkpoints", nil, "secret")
@@ -220,8 +129,8 @@ func TestCheckpointStreamAndList(t *testing.T) {
 	if resp.StatusCode != 200 || !strings.Contains(string(b), `"complete"`) {
 		t.Errorf("restore: %d %s", resp.StatusCode, b)
 	}
-	if fb.calls[len(fb.calls)-1] != "restore dev1 cp-1" {
-		t.Errorf("calls: %v", fb.calls)
+	if fb.Calls[len(fb.Calls)-1] != "restore dev1 cp-1" {
+		t.Errorf("calls: %v", fb.Calls)
 	}
 }
 
@@ -329,24 +238,27 @@ func TestExecWebSocket(t *testing.T) {
 	if !strings.Contains(out, "stdin:hello") || !strings.Contains(out, "cmd:bash -l") || !strings.Contains(out, "env:TERM=xterm") {
 		t.Errorf("stdout: %q", out)
 	}
-	if fb.calls[0] != "bash -l" {
-		t.Errorf("console must map to a login shell, got %v", fb.calls)
+	if fb.Calls[0] != "bash -l" {
+		t.Errorf("console must map to a login shell, got %v", fb.Calls)
 	}
 }
 
 func TestFsEndpoints(t *testing.T) {
 	ts, fb := newTestServer(t)
-	resp, b := do(t, ts, "GET", "/v1/sprites/dev1/fs/read?path=notes.txt&workingDir=/home/pooka", nil, "secret")
-	if resp.StatusCode != 200 || !strings.Contains(string(b), "cmd:cat -- /home/pooka/notes.txt") {
-		t.Errorf("read: %d %s", resp.StatusCode, b)
-	}
-	resp, b = do(t, ts, "PUT", "/v1/sprites/dev1/fs/write?path=/usr/share/terminfo/x/xterm&mkdirParents=true&mode=0644&workingDir=/", strings.NewReader("data"), "secret")
-	if resp.StatusCode != 200 {
+	resp, b := do(t, ts, "PUT", "/v1/sprites/dev1/fs/write?path=/usr/share/terminfo/x/xterm&mkdirParents=true&mode=0644&workingDir=/", strings.NewReader("data"), "secret")
+	if resp.StatusCode != 200 || !strings.Contains(string(b), `"size":4`) {
 		t.Errorf("write: %d %s", resp.StatusCode, b)
 	}
-	last := fb.calls[len(fb.calls)-1]
+	last := fb.Calls[len(fb.Calls)-1]
 	if !strings.Contains(last, "mkdir -p") || !strings.Contains(last, "/usr/share/terminfo/x/xterm 0644") {
 		t.Errorf("write cmd: %s", last)
+	}
+	resp, b = do(t, ts, "GET", "/v1/sprites/dev1/fs/read?path=xterm&workingDir=/usr/share/terminfo/x", nil, "secret")
+	if resp.StatusCode != 200 || string(b) != "data" {
+		t.Errorf("read: %d %q", resp.StatusCode, b)
+	}
+	if resp, _ := do(t, ts, "GET", "/v1/sprites/dev1/fs/read?path=/nope", nil, "secret"); resp.StatusCode != 404 {
+		t.Errorf("read missing: %d", resp.StatusCode)
 	}
 	if resp, _ := do(t, ts, "PUT", "/v1/sprites/dev1/fs/write?path=/x&mode=zz", nil, "secret"); resp.StatusCode != 400 {
 		t.Errorf("bad mode: %d", resp.StatusCode)
@@ -372,5 +284,77 @@ func TestNotImplemented(t *testing.T) {
 	resp, b := do(t, ts, "GET", "/v1/sprites/dev1/services", nil, "secret")
 	if resp.StatusCode != 501 || !strings.Contains(string(b), "not implemented") {
 		t.Errorf("%d %s", resp.StatusCode, b)
+	}
+}
+
+func TestPookaExtensions(t *testing.T) {
+	ts, fb := newTestServer(t)
+	s := New(fb, "secret")
+	s.Create = backend.CreateOptions{Cores: 4, MemoryMB: 8192, DiskGB: 32, SSHPubKey: "daemon-key"}
+	ts.Config.Handler = s.Handler()
+
+	// Create with options: zero values keep the daemon defaults, a client key wins.
+	resp, b := do(t, ts, "POST", "/pooka/v1/sprites", strings.NewReader(`{"name":"dev3","cores":2,"ssh_pubkey":"client-key"}`), "secret")
+	if resp.StatusCode != 201 {
+		t.Fatalf("create: %d %s", resp.StatusCode, b)
+	}
+	if fb.Created.Cores != 2 || fb.Created.MemoryMB != 8192 || fb.Created.DiskGB != 32 || fb.Created.SSHPubKey != "client-key" {
+		t.Errorf("create options: %+v", fb.Created)
+	}
+	var sp spriteResponse
+	json.Unmarshal(b, &sp)
+	if sp.Name != "dev3" || sp.ID != "sprite-9102" {
+		t.Errorf("created: %+v", sp)
+	}
+	if resp, _ := do(t, ts, "POST", "/pooka/v1/sprites", strings.NewReader(`{"name":"dev3"}`), "secret"); resp.StatusCode != 409 {
+		t.Errorf("duplicate: %d", resp.StatusCode)
+	}
+	if resp, _ := do(t, ts, "POST", "/pooka/v1/sprites", strings.NewReader(`{}`), "secret"); resp.StatusCode != 400 {
+		t.Errorf("no name: %d", resp.StatusCode)
+	}
+
+	if resp, b := do(t, ts, "POST", "/pooka/v1/sprites/dev2/start", nil, "secret"); resp.StatusCode != 204 {
+		t.Errorf("start: %d %s", resp.StatusCode, b)
+	}
+	if resp, b := do(t, ts, "POST", "/pooka/v1/sprites/dev1/stop", nil, "secret"); resp.StatusCode != 204 {
+		t.Errorf("stop: %d %s", resp.StatusCode, b)
+	}
+	if resp, _ := do(t, ts, "POST", "/pooka/v1/sprites/nope/start", nil, "secret"); resp.StatusCode != 404 {
+		t.Errorf("start missing: %d", resp.StatusCode)
+	}
+	if resp, b := do(t, ts, "DELETE", "/pooka/v1/sprites/dev1/checkpoints/cp-1", nil, "secret"); resp.StatusCode != 204 {
+		t.Errorf("delete checkpoint: %d %s", resp.StatusCode, b)
+	}
+	if resp, _ := do(t, ts, "DELETE", "/pooka/v1/sprites/dev1/checkpoints/cp-1", nil, "secret"); resp.StatusCode != 404 {
+		t.Errorf("delete missing checkpoint: %d", resp.StatusCode)
+	}
+	want := []string{"create dev3", "start dev2", "stop dev1", "delcp dev1 cp-1"}
+	if strings.Join(fb.Calls, ",") != strings.Join(want, ",") {
+		t.Errorf("calls %v, want %v", fb.Calls, want)
+	}
+	if resp, _ := do(t, ts, "GET", "/pooka/v1/sprites/dev1/start", nil, ""); resp.StatusCode != 401 {
+		t.Errorf("extensions must need auth: %d", resp.StatusCode)
+	}
+	if resp, b := do(t, ts, "GET", "/pooka/v1/nothing", nil, "secret"); resp.StatusCode != 404 || !strings.Contains(string(b), "error") {
+		t.Errorf("unknown extension: %d %s", resp.StatusCode, b)
+	}
+}
+
+func TestFsChown(t *testing.T) {
+	ts, fb := newTestServer(t)
+	body := `{"path":"notes.txt","workingDir":"/home/pooka","uid":"pooka","gid":1000,"recursive":true,"asRoot":true}`
+	resp, b := do(t, ts, "POST", "/v1/sprites/dev1/fs/chown", strings.NewReader(body), "secret")
+	if resp.StatusCode != 200 || !strings.Contains(string(b), `"count":1`) {
+		t.Errorf("chown: %d %s", resp.StatusCode, b)
+	}
+	last := fb.Calls[len(fb.Calls)-1]
+	if !strings.Contains(last, "chown -R") || !strings.HasSuffix(last, "pooka:1000 /home/pooka/notes.txt") {
+		t.Errorf("chown cmd: %s", last)
+	}
+	if resp, _ := do(t, ts, "POST", "/v1/sprites/dev1/fs/chown", strings.NewReader(`{"path":"/x"}`), "secret"); resp.StatusCode != 400 {
+		t.Errorf("chown without owner: %d", resp.StatusCode)
+	}
+	if resp, _ := do(t, ts, "POST", "/v1/sprites/dev1/fs/chown", strings.NewReader(`{"path":"/x","uid":"a b"}`), "secret"); resp.StatusCode != 400 {
+		t.Errorf("chown bad owner: %d", resp.StatusCode)
 	}
 }
