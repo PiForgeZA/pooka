@@ -111,6 +111,31 @@ pooka console dev1
 `pooka ls` shows every environment. Add `POOKA_DEBUG=1` to any command to see each
 call to the host with its duration.
 
+### 6. Optional: the daemon and the official Sprites clients
+
+`pookad` runs on the host and serves the [Sprites API](https://docs.fly.io/sprites/api/openapi.json),
+so the official `sprite` CLI and the Sprites SDKs for Go, JavaScript, Python and
+Elixir work against your Proxmox host. Install it once:
+
+```
+ssh root@proxmox 'bash /root/pooka-scripts/install-daemon.sh /root/pooka-scripts/pookad'
+```
+
+The script generates a token in `/etc/pooka/token` and starts a systemd unit on port
+7700. Then, on any machine with the official CLI:
+
+```
+export SPRITES_API_URL=http://proxmox:7700
+export SPRITE_TOKEN=<contents of /etc/pooka/token>
+export SPRITE_ORG=local
+sprite create dev1
+sprite exec -s dev1 --stdin -- claude --version
+sprite checkpoint create -s dev1
+```
+
+The daemon speaks plain HTTP. Keep port 7700 on your LAN until phase 3 adds TLS.
+See `docs/sprites-api/README.md` for what is implemented and what is not.
+
 ## How it works
 
 The CLI runs `pct` and `lxc-attach` on the host over SSH. There is no daemon, no

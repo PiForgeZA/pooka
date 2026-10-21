@@ -69,3 +69,9 @@ template services, mask units that are not needed in a container, shrink firstbo
 After the template rebuild at 32 GB: `pooka create` 8.7 s end to end (resources 0.9,
 config 0.6, clone 1.2, set 0.6, config 0.6, start 2.0, systemd ready wait 2.5, firstboot
 0.5). Remaining fat: the four `pct` calls at 0.55 s each, and the systemd wait.
+
+## 2026-10-21, through the daemon
+
+`sprite create` via the official CLI against pookad on the host: 7.9 s. The daemon runs
+`pct` locally, so the SSH round trips of the CLI path are gone; what remains is pct's
+own startup per call and the systemd ready wait.

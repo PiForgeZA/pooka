@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -65,26 +66,14 @@ func (b *Backend) run(ctx context.Context, args ...string) (string, error) {
 	return out.String(), nil
 }
 
+// resource is one container as pooka sees it.
 type resource struct {
-	VMID   int    `json:"vmid"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
-	Type   string `json:"type"`
-	Tags   string `json:"tags"`
-	Node   string `json:"node"`
-}
-
-// resources lists every guest in the cluster in one call.
-func (b *Backend) resources(ctx context.Context) ([]resource, error) {
-	out, err := b.run(ctx, "pvesh", "get", "/cluster/resources", "--type", "vm", "--output-format", "json")
-	if err != nil {
-		return nil, err
-	}
-	var rs []resource
-	if err := json.Unmarshal([]byte(out), &rs); err != nil {
-		return nil, fmt.Errorf("parse cluster resources: %w", err)
-	}
-	return rs, nil
+	VMID    int
+	Name    string
+	Status  string
+	Tags    string
+	Node    string
+	Created time.Time
 }
 
 func hasTag(tags, want string) bool {
@@ -96,71 +85,107 @@ func hasTag(tags, want string) bool {
 	return false
 }
 
-// managed returns pooka's containers. Status comes from `pct list`, because the
-// cluster resources status lags several seconds behind start and stop.
-func (b *Backend) managed(ctx context.Context) ([]resource, error) {
-	rs, err := b.resources(ctx)
+// confScript lists tags and description comments of every container config, then the
+// node name. Proxmox stores the description as leading "#" lines, percent-encoded.
+const confScript = "grep -H '^tags:\\|^#' /etc/pve/lxc/*.conf 2>/dev/null; hostname"
+
+// inventory reads pooka's containers from sources that are authoritative and
+// immediate: `pct list` for VMID, status and name, and the config files for tags and
+// creation time. The cluster resources endpoint lags several seconds behind create,
+// start and stop, which made fresh environments "not found".
+func (b *Backend) inventory(ctx context.Context) ([]resource, error) {
+	list, err := b.run(ctx, "pct", "list")
 	if err != nil {
 		return nil, err
 	}
+	conf, err := b.run(ctx, "sh", "-c", confScript)
+	if err != nil {
+		return nil, err
+	}
+	tags, created, node := parseConfs(conf)
 	var out []resource
-	for _, r := range rs {
-		if r.Type == "lxc" && hasTag(r.Tags, Tag) {
+	for _, r := range parsePctList(list) {
+		r.Tags = tags[r.VMID]
+		r.Created = created[r.VMID]
+		r.Node = node
+		if hasTag(r.Tags, Tag) {
 			out = append(out, r)
-		}
-	}
-	if len(out) == 0 {
-		return nil, nil
-	}
-	live, err := b.liveStatus(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for i := range out {
-		if s, ok := live[out[i].VMID]; ok {
-			out[i].Status = s
 		}
 	}
 	return out, nil
 }
 
-// liveStatus parses `pct list` into VMID -> status.
-func (b *Backend) liveStatus(ctx context.Context) (map[int]string, error) {
-	out, err := b.run(ctx, "pct", "list")
+// parsePctList reads `pct list` output. Columns are VMID, Status, an optional Lock,
+// and Name last.
+func parsePctList(out string) []resource {
+	var rs []resource
+	for i, l := range strings.Split(out, "\n") {
+		f := strings.Fields(l)
+		if i == 0 || len(f) < 3 {
+			continue
+		}
+		id, err := strconv.Atoi(f[0])
+		if err != nil {
+			continue
+		}
+		rs = append(rs, resource{VMID: id, Status: f[1], Name: f[len(f)-1]})
+	}
+	return rs
+}
+
+// parseConfs reads confScript output: "<file>:tags: a;b", "<file>:#<encoded>", and
+// the node name on the last line.
+func parseConfs(out string) (tags map[int]string, created map[int]time.Time, node string) {
+	tags, created = map[int]string{}, map[int]time.Time{}
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		file, rest, ok := strings.Cut(l, ".conf:")
+		if !ok {
+			node = strings.TrimSpace(l)
+			continue
+		}
+		vmid, err := strconv.Atoi(path.Base(file))
+		if err != nil {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(rest, "tags:"):
+			tags[vmid] = strings.TrimSpace(strings.TrimPrefix(rest, "tags:"))
+		case strings.HasPrefix(rest, "#"):
+			if t := createdFromDescription(rest[1:]); !t.IsZero() {
+				created[vmid] = t
+			}
+		}
+	}
+	return tags, created, node
+}
+
+// usedVMIDs returns every VMID that has a container or VM config on this node.
+// Config files exist the instant a guest is created, unlike cluster resources.
+func (b *Backend) usedVMIDs(ctx context.Context) (map[int]bool, error) {
+	out, err := b.run(ctx, "sh", "-c", "ls /etc/pve/lxc /etc/pve/qemu-server 2>/dev/null")
 	if err != nil {
 		return nil, err
 	}
-	return parsePctList(out), nil
-}
-
-func parsePctList(out string) map[int]string {
-	m := map[int]string{}
-	for i, l := range strings.Split(out, "\n") {
-		f := strings.Fields(l)
-		if i == 0 || len(f) < 2 {
-			continue
-		}
-		if id, err := strconv.Atoi(f[0]); err == nil {
-			m[id] = f[1]
+	used := map[int]bool{}
+	for _, l := range strings.Fields(out) {
+		if id, err := strconv.Atoi(strings.TrimSuffix(l, ".conf")); err == nil {
+			used[id] = true
 		}
 	}
-	return m
+	return used, nil
+}
+
+func (b *Backend) managed(ctx context.Context) ([]resource, error) {
+	return b.inventory(ctx)
 }
 
 func (b *Backend) find(ctx context.Context, name string) (resource, error) {
-	rs, err := b.resources(ctx)
+	rs, err := b.inventory(ctx)
 	if err != nil {
 		return resource{}, err
 	}
 	for _, r := range rs {
-		if r.Type == "lxc" && hasTag(r.Tags, Tag) && r.Name == name {
-			st, err := b.run(ctx, "pct", "status", strconv.Itoa(r.VMID))
-			if err != nil {
-				return resource{}, err
-			}
-			if _, s, ok := strings.Cut(strings.TrimSpace(st), " "); ok {
-				r.Status = s
-			}
+		if r.Name == name {
 			return r, nil
 		}
 	}
@@ -182,7 +207,7 @@ func (b *Backend) ip(ctx context.Context, vmid int) string {
 }
 
 func (b *Backend) toEnv(ctx context.Context, r resource) backend.Env {
-	e := backend.Env{Name: r.Name, VMID: r.VMID, Node: r.Node, Status: r.Status}
+	e := backend.Env{Name: r.Name, VMID: r.VMID, Node: r.Node, Status: r.Status, Created: r.Created}
 	if r.Status == "running" {
 		e.IP = b.ip(ctx, r.VMID)
 	}
@@ -194,41 +219,11 @@ func (b *Backend) List(ctx context.Context) ([]backend.Env, error) {
 	if err != nil {
 		return nil, err
 	}
-	created := b.createdTimes(ctx)
 	envs := make([]backend.Env, 0, len(rs))
 	for _, r := range rs {
-		e := b.toEnv(ctx, r)
-		e.Created = created[r.VMID]
-		envs = append(envs, e)
+		envs = append(envs, b.toEnv(ctx, r))
 	}
 	return envs, nil
-}
-
-// createdTimes reads the description of every container config in one call, which is
-// far cheaper than `pct config` per container. Proxmox stores the description as
-// leading "#" comment lines in the config file, percent-encoded. Missing entries
-// stay zero.
-func (b *Backend) createdTimes(ctx context.Context) map[int]time.Time {
-	out := map[int]time.Time{}
-	raw, err := b.run(ctx, "sh", "-c", "grep -H '^#' /etc/pve/lxc/*.conf 2>/dev/null || true")
-	if err != nil {
-		return out
-	}
-	for _, l := range strings.Split(raw, "\n") {
-		// /etc/pve/lxc/9100.conf:#{"created"%3A...}
-		file, rest, ok := strings.Cut(l, ":#")
-		if !ok {
-			continue
-		}
-		vmid, err := strconv.Atoi(strings.TrimSuffix(path.Base(file), ".conf"))
-		if err != nil {
-			continue
-		}
-		if t := createdFromDescription(rest); !t.IsZero() {
-			out[vmid] = t
-		}
-	}
-	return out
 }
 
 func (b *Backend) Get(ctx context.Context, name string) (backend.Env, error) {
@@ -236,11 +231,7 @@ func (b *Backend) Get(ctx context.Context, name string) (backend.Env, error) {
 	if err != nil {
 		return backend.Env{}, err
 	}
-	e := b.toEnv(ctx, r)
-	if cfg, err := b.run(ctx, "pct", "config", strconv.Itoa(r.VMID)); err == nil {
-		e.Created = parseCreated(cfg)
-	}
-	return e, nil
+	return b.toEnv(ctx, r), nil
 }
 
 // parseCreated reads the creation time from `pct config` output, where the
@@ -273,11 +264,11 @@ func createdFromDescription(d string) time.Time {
 	return time.Time{}
 }
 
-// freeVMID returns the lowest unused VMID in the configured range.
-func (b *Backend) freeVMID(rs []resource) (int, error) {
-	used := map[int]bool{}
-	for _, r := range rs {
-		used[r.VMID] = true
+// freeVMID returns the lowest VMID in the configured range with no config file.
+func (b *Backend) freeVMID(ctx context.Context) (int, error) {
+	used, err := b.usedVMIDs(ctx)
+	if err != nil {
+		return 0, err
 	}
 	for id := b.opts.VMIDLow; id <= b.opts.VMIDHigh; id++ {
 		if !used[id] {
@@ -291,20 +282,16 @@ func (b *Backend) Create(ctx context.Context, name string, o backend.CreateOptio
 	if err := backend.ValidateName(name); err != nil {
 		return backend.Env{}, err
 	}
-	rs, err := b.resources(ctx)
-	if err != nil {
+	if r, err := b.find(ctx, name); err == nil {
+		return backend.Env{}, fmt.Errorf("%w: %s (VMID %d)", backend.ErrExists, name, r.VMID)
+	} else if !errors.Is(err, backend.ErrNotFound) {
 		return backend.Env{}, err
-	}
-	for _, r := range rs {
-		if r.Type == "lxc" && hasTag(r.Tags, Tag) && r.Name == name {
-			return backend.Env{}, fmt.Errorf("%w: %s (VMID %d)", backend.ErrExists, name, r.VMID)
-		}
 	}
 	tpl := strconv.Itoa(b.opts.Template)
 	if _, err := b.run(ctx, "pct", "config", tpl); err != nil {
 		return backend.Env{}, fmt.Errorf("template %s not found; build one with scripts/build-template.sh: %w", tpl, err)
 	}
-	vmid, err := b.freeVMID(rs)
+	vmid, err := b.freeVMID(ctx)
 	if err != nil {
 		return backend.Env{}, err
 	}

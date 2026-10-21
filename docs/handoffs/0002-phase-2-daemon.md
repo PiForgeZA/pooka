@@ -49,6 +49,21 @@ records one of three outcomes:
 2. The SDKs work, the CLI does not. `pooka` stays the CLI.
 3. Neither works cleanly. pooka has its own API modelled on Sprites, and the ADR says why.
 
+## Progress, 2026-10-21
+
+Steps 1 to 5 and 7 are done. `pookad` runs on the host as a systemd unit. The official
+`sprite` CLI completes the full lifecycle against it: create, ls, info, exec with
+stdin, TTY and http-post, checkpoint create and list, restore, destroy. ADR 0004 is
+accepted with outcome 1. See docs/sprites-api/README.md for the endpoint map and the
+one known limitation (attach by session id, used by `exec --no-stdin`).
+
+Fixed on the way: the backend no longer reads the cluster resources endpoint, which
+lags several seconds and made fresh environments "not found"; it reads `pct list` and
+the config files instead. Proxmox stores the description as leading `#` lines.
+
+Remaining from the original list: step 6 (HTTP backend in the `pooka` CLI) and step 8
+(SPEC updates are done; keep them current).
+
 ## Next steps in order
 
 1. Fetch and read the Sprites specs: https://docs.fly.io/sprites/api/openapi.json and

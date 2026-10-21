@@ -205,14 +205,37 @@ all others within target.
 | restore | under 10 s |
 | exec `true` | under 1 s |
 
-## 16. Later phases
+## 16. Phase 2: the daemon
 
-These are not part of phase 1. They set the direction.
+`pookad` runs on the host and serves the Sprites HTTP and WebSocket API. See ADR 0004
+and docs/sprites-api/README.md for the endpoint map and the compatibility probe.
 
-- Phase 2: a daemon on the host that implements the Sprites OpenAPI spec. The official
-  `sprite` CLI and SDKs may then target pooka.
-- Phase 3: a reverse proxy with a wildcard domain. A request to an environment's URL
-  starts it. Idle environments stop after a timeout.
+- Install with `scripts/install-daemon.sh <pookad binary>`. It writes
+  `/etc/pooka/pookad.yaml`, generates `/etc/pooka/token`, and enables a systemd unit.
+- Listens on `0.0.0.0:7700` by default. Plain HTTP. The LAN is the trust boundary.
+- One bearer token. One organization, `local`.
+- The official `sprite` CLI and SDKs target pooka with three environment variables:
+  `SPRITES_API_URL=http://<host>:7700`, `SPRITE_TOKEN=<token>`, `SPRITE_ORG=local`.
+- Implemented: sprites list, create, get, update (no-op), delete; checkpoint create,
+  list, get, restore; exec over WebSocket with TTY, stdin and resize; exec over HTTP
+  POST with framed output; filesystem read, write and list; session list and kill.
+- Not implemented, returns 501: policies, services, OAuth connections, proxy, watch.
+- Known limitation: attaching to an existing exec session returns 404. The official
+  CLI's `exec --no-stdin` mode needs it. Use `--stdin` or `--http-post`.
+- Status mapping: running is `running`; stopped is `cold`. No `warm`.
+- The daemon runs commands locally; the LXC backend is unchanged. `POOKA_DEBUG=1` on
+  the daemon logs every host call with its duration.
+- The backend reads containers from `pct list` and the config files, never from the
+  cluster resources endpoint, which lags several seconds behind changes.
+
+## 17. Later phases
+
+These are not part of phases 1 and 2. They set the direction.
+
+- Phase 2b: the `pooka` CLI gains an HTTP backend that talks to `pookad`, selected by
+  `daemon_url` and `token` in its config. SSH mode stays for template builds.
+- Phase 3: a reverse proxy with a wildcard domain and TLS. A request to an
+  environment's URL starts it. Idle environments stop after a timeout.
 - Phase 4: an agent inside the environment for streaming exec, PTY, file watch and
   services.
 - Phase 5: a QEMU backend on Proxmox, then a Firecracker backend beside Proxmox.

@@ -77,6 +77,16 @@ Query parameters on the exec path: `cmd` (repeated), `path`, `stdin`, `tty`, `en
 | `policy/*`, `services/*`, `oauth/*` | 501 | phases 3 and 4 |
 | WebSocket `proxy`, `control`, `ports/watch`, `fs/watch`, `exec/{id}` attach | later | |
 
+Verified live on 2026-10-21 with the official CLI against pookad: `ls`, `create`,
+`info`, `exec --stdin`, `exec --tty`, `exec --http-post`, `checkpoint create`,
+`checkpoint list`, `restore`, `destroy`.
+
+Known limitation: `sprite exec --no-stdin` is the CLI's reconnectable mode. It
+attaches to a session by id before sending a command. pooka keeps no attachable
+sessions yet and answers 404 with a hint to use `--stdin` or `--http-post`. How the CLI
+expects that session to come into being is not described by the public specs or the
+SDK, so pooka does not guess.
+
 Status mapping: a running container reports `running`; a stopped one reports `cold`.
 pooka has no `warm` state in phase 2. The `url` field is `http://<ip>:8080` while running
 and empty otherwise, until phase 3 adds real URLs.

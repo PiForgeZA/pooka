@@ -25,6 +25,21 @@ builds:
       - -trimpath
     ldflags:
       - -s -w -X github.com/PiForgeZA/pooka/internal/cli.Version={{ .Version }}
+  - id: pookad
+    main: ./cmd/pookad
+    binary: pookad
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.Version={{ .Version }}
 
 archives:
   - id: default
@@ -73,5 +88,6 @@ release:
     ## Install
 
     Download the archive for your platform, unpack it, and put `pooka` on your PATH.
-    The archive also contains `scripts/` for building the template on your Proxmox host.
-    See the README quick start.
+    The Linux archives also contain `pookad`, the daemon that speaks the Sprites API,
+    and `scripts/` for building the template and installing the daemon on your Proxmox
+    host. See the README quick start.
