@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -546,6 +547,13 @@ func (b *Backend) ListCheckpoints(ctx context.Context, name string) ([]backend.C
 		}
 		cps = append(cps, backend.Checkpoint{ID: s.Name, Time: time.Unix(s.SnapTime, 0), Comment: strings.TrimSpace(s.Description)})
 	}
+	// pvesh returns the snapshots in hash order. Sort oldest first, then by id.
+	sort.Slice(cps, func(i, j int) bool {
+		if !cps[i].Time.Equal(cps[j].Time) {
+			return cps[i].Time.Before(cps[j].Time)
+		}
+		return cps[i].ID < cps[j].ID
+	})
 	return cps, nil
 }
 

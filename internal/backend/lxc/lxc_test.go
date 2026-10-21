@@ -235,15 +235,16 @@ func TestDestroyStopsThenPurges(t *testing.T) {
 	assertOrder(t, f.Calls, []string{"pct stop 9100", "pct destroy 9100 --purge"})
 }
 
-func TestListCheckpointsSkipsCurrent(t *testing.T) {
+func TestListCheckpointsSkipsCurrentAndSortsByTime(t *testing.T) {
 	f := newFake()
-	f.On("pvesh get /nodes/proxmox/lxc/9100/snapshot", `[{"name":"cp-1700000000","snaptime":1700000000,"description":"before upgrade\n"},{"name":"current","description":"You are here!"}]`)
+	// pvesh returns hash order: the newest first here, then current, then the oldest.
+	f.On("pvesh get /nodes/proxmox/lxc/9100/snapshot", `[{"name":"cp-1700000900","snaptime":1700000900,"description":"later"},{"name":"current","description":"You are here!"},{"name":"cp-1700000000","snaptime":1700000000,"description":"before upgrade\n"}]`)
 	cps, err := newBackend(f).ListCheckpoints(context.Background(), "dev1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cps) != 1 || cps[0].ID != "cp-1700000000" || cps[0].Comment != "before upgrade" {
-		t.Errorf("got %+v", cps)
+	if len(cps) != 2 || cps[0].ID != "cp-1700000000" || cps[0].Comment != "before upgrade" || cps[1].ID != "cp-1700000900" {
+		t.Errorf("want oldest first without current, got %+v", cps)
 	}
 }
 
