@@ -3,11 +3,74 @@ package host
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
+
+func TestLocalCancelEndsChild(t *testing.T) {
+	for _, terminal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pty=%t", terminal), func(t *testing.T) {
+			testLocalCancelEndsChild(t, terminal)
+		})
+	}
+}
+
+func testLocalCancelEndsChild(t *testing.T, terminal bool) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pidFile := filepath.Join(t.TempDir(), "child")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		cmd := Cmd{Args: []string{"sh", "-c", `sleep 30 & echo $! > "$1"; wait`, "sh", pidFile}, Stdout: io.Discard, Stderr: io.Discard}
+		if terminal {
+			cmd.PTY = &PTY{}
+		}
+		Local{}.Run(ctx, cmd)
+	}()
+	var pid int
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		b, _ := os.ReadFile(pidFile)
+		pid, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+		if pid > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if pid <= 0 {
+		t.Fatal("child did not start")
+	}
+	defer syscall.Kill(pid, syscall.SIGKILL)
+	cancel()
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if syscall.Kill(pid, 0) != nil {
+			break
+		}
+		// A zombie has exited but its parent has not reaped it yet.
+		b, _ := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		if strings.Contains(string(b), ") Z ") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if time.Now().After(deadline) {
+		t.Error("child still runs one second after cancellation")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Error("Run did not return after cancellation")
+	}
+}
 
 func TestLocalRunPipes(t *testing.T) {
 	var out, errb bytes.Buffer
