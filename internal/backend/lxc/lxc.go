@@ -457,17 +457,17 @@ func (b *Backend) Exec(ctx context.Context, name string, cmd []string, o backend
 	switch {
 	case o.Root:
 		args = attach(strconv.Itoa(r.VMID), "sh", "-lc", inner)
-	case o.TTY || o.PTY != nil:
+	default:
 		// runuser -c starts a new session, which drops the controlling terminal:
 		// bash then warns "no job control in this shell" and Ctrl-C does not reach
 		// the foreground job. --session-command keeps the session that lxc-attach
 		// gave its pty to. The pty is private to this exec, so the tty-hijack
-		// concern behind "-c" does not apply.
+		// concern behind "-c" does not apply. Without a TTY, keep the host
+		// command's process group so cancellation also reaches its children.
 		args = attach(strconv.Itoa(r.VMID), "runuser", "-l", "pooka", "--session-command", inner)
-	default:
-		args = attach(strconv.Itoa(r.VMID), "runuser", "-l", "pooka", "-c", inner)
 	}
-	return b.h.Run(ctx, host.Cmd{Args: args, Stdin: o.Stdin, Stdout: o.Stdout, Stderr: o.Stderr, TTY: o.TTY, PTY: o.PTY})
+	args = superviseExec(args, o.TTY || o.PTY != nil)
+	return b.h.Run(ctx, host.Cmd{Args: args, Stdin: o.Stdin, Stdout: o.Stdout, Stderr: o.Stderr, TTY: o.TTY, PTY: o.PTY, DedicatedSession: true})
 }
 
 var envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)

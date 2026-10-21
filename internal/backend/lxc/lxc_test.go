@@ -148,13 +148,13 @@ func TestCreateReadyTimeout(t *testing.T) {
 func TestExecRunsAsPookaUser(t *testing.T) {
 	f := newFake()
 	var out bytes.Buffer
-	f.On("lxc-attach -n 9100 --clear-env --keep-var TERM -- runuser -l pooka -c", "hi\n")
+	f.On("setpriv --pdeathsig KILL lxc-attach -n 9100 --clear-env --keep-var TERM --", "hi\n")
 	code, err := newBackend(f).Exec(context.Background(), "dev1", []string{"echo", "hi there"}, backend.ExecOptions{Stdout: &out, Dir: "/work", Env: []string{"TERM=xterm", "bad key=1"}})
 	if err != nil || code != 0 {
 		t.Fatal(code, err)
 	}
 	last := f.Calls[len(f.Calls)-1]
-	if last != "lxc-attach -n 9100 --clear-env --keep-var TERM -- runuser -l pooka -c export TERM=xterm; cd /work && echo 'hi there'" {
+	if !strings.HasSuffix(last, "runuser -l pooka --session-command export TERM=xterm; cd /work && echo 'hi there'") {
 		t.Errorf("got %q", last)
 	}
 	if out.String() != "hi\n" {
@@ -287,20 +287,20 @@ func assertOrder(t *testing.T, calls, want []string) {
 
 func TestExecTTYKeepsSession(t *testing.T) {
 	f := newFake()
-	f.On("lxc-attach -n 9100 --clear-env --keep-var TERM -- runuser -l pooka --session-command bash -l", "")
+	f.On("setpriv --pdeathsig KILL lxc-attach -n 9100 --clear-env --keep-var TERM --", "")
 	if _, err := newBackend(f).Exec(context.Background(), "dev1", []string{"bash", "-l"}, backend.ExecOptions{TTY: true}); err != nil {
 		t.Fatal(err)
 	}
 	last := f.Calls[len(f.Calls)-1]
-	if !strings.Contains(last, "--session-command bash -l") || strings.Contains(last, " -c ") {
+	if !strings.Contains(last, "--session-command bash -l") {
 		t.Errorf("tty exec must keep the session: %s", last)
 	}
 	f = newFake()
-	f.On("lxc-attach -n 9100 --clear-env --keep-var TERM -- runuser -l pooka -c true", "")
+	f.On("setpriv --pdeathsig KILL lxc-attach -n 9100 --clear-env --keep-var TERM --", "")
 	if _, err := newBackend(f).Exec(context.Background(), "dev1", []string{"true"}, backend.ExecOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if last := f.Calls[len(f.Calls)-1]; !strings.Contains(last, "runuser -l pooka -c true") {
-		t.Errorf("non-tty exec keeps -c: %s", last)
+	if last := f.Calls[len(f.Calls)-1]; !strings.Contains(last, "runuser -l pooka --session-command true") {
+		t.Errorf("non-tty exec must keep the session: %s", last)
 	}
 }

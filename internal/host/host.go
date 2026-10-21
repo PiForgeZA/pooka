@@ -32,6 +32,9 @@ type Cmd struct {
 	// PTY runs the command under a pseudo-terminal driven by Stdin and Stdout.
 	// Only the local host supports it.
 	PTY *PTY
+	// DedicatedSession gives the command its own SSH connection. Its remote
+	// parent then exits when the connection closes. Local ignores this field.
+	DedicatedSession bool
 }
 
 // Host runs commands on the Proxmox host and copies files to and from it.

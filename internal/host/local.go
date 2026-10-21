@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 )
@@ -20,6 +22,19 @@ func (Local) Run(ctx context.Context, cmd Cmd) (int, error) {
 		return -1, errors.New("empty command")
 	}
 	c := exec.CommandContext(ctx, cmd.Args[0], cmd.Args[1:]...)
+	c.WaitDelay = 250 * time.Millisecond
+	if !cmd.TTY && cmd.PTY == nil {
+		// Keep descendants in a private group. Killing only the command leaves
+		// children running with the output pipes open.
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		c.Cancel = func() error {
+			err := syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+			if errors.Is(err, syscall.ESRCH) {
+				return os.ErrProcessDone
+			}
+			return err
+		}
+	}
 	switch {
 	case cmd.PTY != nil:
 		return runPTY(c, cmd)

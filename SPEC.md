@@ -131,7 +131,7 @@ Each command maps to `pct` calls on the host over SSH. The table gives the mappi
 |---|---|
 | `pooka create <name>` | Section 9. |
 | `pooka ls` | `pct list`, filtered by the `pooka` tag. Show name, VMID, status, IP. |
-| `pooka exec <name> -- <cmd...>` | `lxc-attach -n <vmid> --clear-env -- runuser -l pooka -c '<cmd...>'`. Add `-t` for a TTY; then `--session-command` replaces `-c`. `--root` runs as root. `lxc-attach` is what `pct exec` wraps, without 0.5 s of perl startup per call. |
+| `pooka exec <name> -- <cmd...>` | `lxc-attach` runs an exec supervisor and `runuser -l pooka --session-command '<cmd...>'`. Add `-t` for a TTY. `--root` runs as root. The supervisor ends the process session when the client disconnects. See ADR 0006. |
 | `pooka console <name>` | `exec` of `bash -l` with a TTY. |
 | `pooka push <name> <local> <remote>` | `scp` to host, then `pct push`. |
 | `pooka pull <name> <remote> <local>` | `pct pull`, then `scp` from host. |
@@ -155,6 +155,9 @@ Rules:
   option.
 - With a TTY, `exec` keeps the session that `lxc-attach` gave its terminal to
   (`runuser --session-command`), so the shell has job control and Ctrl-C works.
+- Exec over SSH uses a dedicated connection. Other SSH calls use connection multiplexing.
+- On Linux, killing the client also closes its dedicated SSH connection. On other
+  client platforms, SSH cleanup requires normal exit or context cancellation.
 - Over the daemon, `create` sends only the flags the user set. Unset flags take the
   daemon's defaults from `/etc/pooka/pookad.yaml`, not the client config.
 - Over the daemon, `push` is limited to 16 MB per file. Use `--transport ssh` for

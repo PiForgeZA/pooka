@@ -34,11 +34,17 @@ func (s *SSH) baseArgs() []string {
 
 func (s *SSH) Run(ctx context.Context, cmd Cmd) (int, error) {
 	args := s.baseArgs()
+	if cmd.DedicatedSession {
+		args = []string{"-o", "BatchMode=yes", "-o", "ControlMaster=no", "-o", "ControlPath=none"}
+	}
 	if cmd.TTY {
 		args = append(args, "-t")
 	}
 	args = append(args, s.Target, "--", ShellJoin(cmd.Args))
 	c := exec.CommandContext(ctx, "ssh", args...)
+	if cmd.DedicatedSession {
+		killWithParent(c)
+	}
 	if cmd.TTY {
 		c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	} else {
