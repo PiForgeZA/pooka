@@ -29,7 +29,7 @@ jobs:
       - name: shellcheck
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q shellcheck
-          shellcheck scripts/*.sh scripts/template/*.sh
+          shellcheck install.sh scripts/*.sh scripts/template/*.sh
 
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}

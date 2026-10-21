@@ -67,7 +67,8 @@ The template gives environments their speed. Build it once. Rebuild it when tool
 7. Convert it with `pct template <id>`.
 8. Record the template ID in the pooka config file.
 
-pooka ships a script, `scripts/build-template.sh`, that does steps 1 to 7.
+pooka ships a script, `scripts/build-template.sh`, that does steps 1 to 7. The script
+is embedded in the `pooka` binary; `pooka setup` copies it to the host and runs it.
 
 ## 8. Configuration
 
@@ -98,6 +99,13 @@ user can then reach the environment with `ssh pooka@<ip>` and with tools such as
 
 A `.pooka` file in the current directory can name the active environment. The command
 `pooka use <name>` writes it. Commands without a name use the active environment.
+
+`pooka setup` writes the config file (ADR 0007). It connects to the host over SSH,
+reads the thin storages, bridges, address and architecture, asks each question with a
+default, builds the template if the VMID does not exist, installs `pookad`, saves the
+token to `~/.config/pooka/token`, and verifies with a list. Every answer is a flag.
+`--yes` takes the flags and defaults without asking. `--daemon=false` keeps SSH as the
+transport. `--pookad <file>` pushes a local daemon binary instead of the release.
 
 ## 9. Create
 
@@ -143,6 +151,7 @@ Each command maps to `pct` calls on the host over SSH. The table gives the mappi
 | `pooka start <name>` | `pct start <vmid>`. |
 | `pooka destroy <name>` | `pct stop`, then `pct destroy <vmid> --purge`. |
 | `pooka use <name>` | Write `.pooka` in the current directory. |
+| `pooka setup` | Section 8. Copies the embedded `scripts/` to `/root/pooka-scripts`, runs `build-template.sh` and `install-daemon.sh` there as needed. |
 
 Rules:
 

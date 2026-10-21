@@ -57,22 +57,69 @@ Codex, herdr, and an SSH server that accepts your key. Edit
   build the template. `ssh proxmox true` must succeed without a password prompt.
 - Go 1.24 or newer to build the CLI.
 
-### 2. Get the CLI
-
-From a [release](https://github.com/PiForgeZA/pooka/releases): download the archive
-for your platform, unpack it, put `pooka` on your PATH. The archive also contains the
-`scripts/` directory used in step 4.
-
-Or build from source with Go 1.24 or newer:
+### 2. Install the CLI
 
 ```
-git clone https://github.com/PiForgeZA/pooka
-cd pooka
-go build -o pooka ./cmd/pooka
-cp pooka ~/.local/bin/        # or anywhere on your PATH
+curl -fsSL https://raw.githubusercontent.com/PiForgeZA/pooka/main/install.sh | sh
 ```
 
-### 3. Build the template, once
+The script downloads the latest release for your OS and architecture, verifies it
+against the release checksums, and puts `pooka` in `~/.local/bin`. It needs no root.
+`--version v0.2.1` pins a release, `--bin-dir DIR` changes the target.
+
+Prefer not to pipe a script into a shell? Download the archive from a
+[release](https://github.com/PiForgeZA/pooka/releases) and put `pooka` on your PATH,
+or build from source with Go 1.24 or newer:
+
+```
+git clone https://github.com/PiForgeZA/pooka && cd pooka
+go build -o ~/.local/bin/pooka ./cmd/pooka
+```
+
+### 3. Set up the host
+
+```
+pooka setup
+```
+
+It connects to your Proxmox host over SSH, asks a few questions with defaults
+taken from the host (thin storage, bridge, template VMID, disk, cores, memory, your
+public key), builds the template if it is missing, installs the `pookad` daemon,
+saves its token, and writes `~/.config/pooka/config.yaml`. Every answer is also a
+flag; `pooka setup --yes` takes the defaults without asking, and `--daemon=false`
+keeps SSH as the transport.
+
+Then:
+
+```
+pooka create dev1
+pooka console dev1
+```
+
+That is the whole quick start. The rest of this section is the manual route, which
+`pooka setup` automates.
+
+### 4. Use it
+
+`pooka ls` shows every environment. Add `POOKA_DEBUG=1` to any command to see each
+request or host call with its duration.
+
+The official Sprites clients use the same daemon and token:
+
+```
+export SPRITES_API_URL=http://proxmox:7700
+export SPRITE_TOKEN=$(cat ~/.config/pooka/token)
+export SPRITE_ORG=local
+sprite create dev1
+sprite exec -s dev1 --stdin -- claude --version
+sprite checkpoint create -s dev1
+```
+
+See `docs/sprites-api/README.md` for what is implemented and what is not.
+
+### Manual route
+
+#### Build the template, once
 
 Copy the scripts to the host and run the build there as root. It takes a few minutes and
 creates container 9000 on `local-lvm` at 32 GB thin. Override with `POOKA_TEMPLATE_VMID`,
@@ -86,7 +133,7 @@ ssh root@proxmox 'bash /root/pooka-scripts/build-template.sh'
 Rebuild whenever you change the tool set: `pct destroy 9000 --purge`, then run the
 script again. Existing environments keep their old tools.
 
-### 4. Install the daemon on the host
+#### Install the daemon on the host
 
 `pookad` runs on the host, drives the containers locally, and serves the
 [Sprites API](https://docs.fly.io/sprites/api/openapi.json). The `pooka` CLI, the
@@ -106,7 +153,7 @@ HTTP. Keep port 7700 on your LAN until phase 3 adds TLS.
 If you would rather not run a daemon, skip this step. The CLI then runs `pct` over
 SSH, which needs root SSH access from every machine you use pooka on.
 
-### 5. Configure
+#### Configure
 
 pooka reads `~/.config/pooka/config.yaml`. Every key has a default, shown here. You
 need the file for the two daemon keys; the rest only if your setup differs.
@@ -131,29 +178,6 @@ command. The environment variables `SPRITES_API_URL` and `SPRITE_TOKEN` override
 two daemon keys, so one shell serves `pooka` and `sprite` alike. Over the daemon,
 `create` uses the daemon's own defaults for cores, memory and disk unless you pass
 the flags.
-
-### 6. Use it
-
-```
-pooka create dev1
-pooka console dev1
-```
-
-`pooka ls` shows every environment. Add `POOKA_DEBUG=1` to any command to see each
-request or host call with its duration.
-
-The official Sprites clients use the same daemon and token:
-
-```
-export SPRITES_API_URL=http://proxmox:7700
-export SPRITE_TOKEN=$(cat ~/.config/pooka/token)
-export SPRITE_ORG=local
-sprite create dev1
-sprite exec -s dev1 --stdin -- claude --version
-sprite checkpoint create -s dev1
-```
-
-See `docs/sprites-api/README.md` for what is implemented and what is not.
 
 ## How it works
 

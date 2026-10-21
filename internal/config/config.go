@@ -24,9 +24,9 @@ type Config struct {
 	SSHPubKey string `yaml:"ssh_pubkey"`
 	// Daemon transport (ADR 0005). If DaemonURL is set, the CLI uses pookad over
 	// HTTP. SPRITES_API_URL and SPRITE_TOKEN override these.
-	DaemonURL string `yaml:"daemon_url"`
-	Token     string `yaml:"token"`
-	TokenFile string `yaml:"token_file"`
+	DaemonURL string `yaml:"daemon_url,omitempty"`
+	Token     string `yaml:"token,omitempty"`
+	TokenFile string `yaml:"token_file,omitempty"`
 }
 
 // Default returns the built-in defaults.
@@ -54,6 +54,29 @@ func Path() string {
 		dir = filepath.Join(os.Getenv("HOME"), ".config")
 	}
 	return filepath.Join(dir, "pooka", "config.yaml")
+}
+
+// TokenPath is where `pooka setup` stores the daemon token: next to the config file.
+func TokenPath() string {
+	return filepath.Join(filepath.Dir(Path()), "token")
+}
+
+// Marshal renders the config as YAML, as Save writes it.
+func Marshal(c Config) ([]byte, error) {
+	return yaml.Marshal(c)
+}
+
+// Save writes the config file, creating its directory. The file is private: it
+// may hold a token.
+func Save(c Config) error {
+	b, err := Marshal(c)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(Path()), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(Path(), b, 0o600)
 }
 
 // Load reads the config file over the defaults, then the environment overrides.
