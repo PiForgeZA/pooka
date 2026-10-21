@@ -44,6 +44,9 @@ builds:
 archives:
   - id: default
     formats: [tar.gz]
+    # pooka builds for Linux and macOS, pookad for Linux only, so the Linux
+    # archives hold two binaries and the macOS ones hold one. That is intended.
+    allow_different_binary_count: true
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
