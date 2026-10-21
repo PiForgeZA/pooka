@@ -27,8 +27,8 @@ const (
 
 // Exec runs cmd over the Sprites WebSocket exec protocol. With TTY it puts the local
 // terminal in raw mode, forwards window size changes, and restores it on return.
-// Root is implemented with sudo inside the environment: the Sprites API has no
-// run-as-root option, and the pooka user has passwordless sudo (SPEC section 7).
+// Root uses the pooka extension route with root=true: the Sprites API has no
+// run-as-root option, and sudo would start a new session without the terminal.
 func (c *Client) Exec(ctx context.Context, name string, cmd []string, o backend.ExecOptions) (int, error) {
 	if len(cmd) == 0 {
 		return -1, errors.New("exec: no command")
@@ -36,11 +36,13 @@ func (c *Client) Exec(ctx context.Context, name string, cmd []string, o backend.
 	if o.PTY != nil {
 		return -1, errors.New("exec: PTY mode is for the daemon, not the HTTP client")
 	}
-	if o.Root {
-		cmd = append([]string{"sudo", "-n", "--"}, cmd...)
-	}
 	stdin, stdout, stderr := o.Stdin, o.Stdout, o.Stderr
 	q := url.Values{}
+	execPath := spritePath(name, "exec")
+	if o.Root {
+		execPath = pookaPath(name, "exec")
+		q.Set("root", "true")
+	}
 	for _, a := range cmd {
 		q.Add("cmd", a)
 	}
@@ -74,7 +76,7 @@ func (c *Client) Exec(ctx context.Context, name string, cmd []string, o backend.
 		stderr = io.Discard
 	}
 
-	wsURL := c.URL + spritePath(name, "exec") + "?" + q.Encode()
+	wsURL := c.URL + execPath + "?" + q.Encode()
 	conn, resp, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPClient: c.HTTP, HTTPHeader: c.headers()})
 	if c.Debug != nil {
 		status := "error"

@@ -159,8 +159,8 @@ func TestExec(t *testing.T) {
 	if _, err := c.Exec(ctx, "dev1", []string{"ls"}, backend.ExecOptions{Root: true}); err != nil {
 		t.Errorf("root: %v", err)
 	}
-	if last := fb.Calls[len(fb.Calls)-1]; last != "sudo -n -- ls" {
-		t.Errorf("root must use sudo: %q", last)
+	if last := fb.Calls[len(fb.Calls)-1]; last != "ls" || !fb.Root[len(fb.Root)-1] {
+		t.Errorf("root must go through the extension route as root: %q root=%v", last, fb.Root)
 	}
 	if _, err := c.Exec(ctx, "nope", []string{"ls"}, backend.ExecOptions{}); !errors.Is(err, backend.ErrNotFound) {
 		t.Errorf("missing env: %v", err)

@@ -19,6 +19,7 @@ type Fake struct {
 	Cps     map[string][]backend.Checkpoint
 	Calls   []string
 	Created backend.CreateOptions // options of the last Create
+	Root    []bool                // Root flag of each Exec, parallel to its Calls entry
 	Pushed  map[string]string     // remote path -> contents written by Exec "cat > f"
 }
 
@@ -96,6 +97,7 @@ func (f *Fake) Exec(_ context.Context, name string, cmd []string, o backend.Exec
 		return -1, backend.ErrNotFound
 	}
 	f.Calls = append(f.Calls, strings.Join(cmd, " "))
+	f.Root = append(f.Root, o.Root)
 	if cmd[0] == "exit" {
 		return 7, nil
 	}

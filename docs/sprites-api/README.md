@@ -100,6 +100,7 @@ They use the same bearer token. The official `sprite` CLI never calls them.
 | `POST /pooka/v1/sprites/{name}/start` | none | 204 |
 | `POST /pooka/v1/sprites/{name}/stop` | none | 204 |
 | `DELETE /pooka/v1/sprites/{name}/checkpoints/{id}` | none | 204 |
+| `GET` and `POST /pooka/v1/sprites/{name}/exec` | same protocol and query as the Sprites exec, plus `root=true` to run as root | as the Sprites exec |
 
 Errors use the same `{"error": "..."}` shape and codes as the Sprites endpoints:
 400, 401, 404, 409, 500.
@@ -112,7 +113,7 @@ How the `pooka` CLI maps onto the API (internal/backend/httpapi):
 | `create` | `POST /pooka/v1/sprites` |
 | `start`, `stop` | pooka extensions |
 | `destroy` | `DELETE /v1/sprites/{name}` |
-| `exec`, `console` | WebSocket exec; `--root` prepends `sudo -n --` |
+| `exec`, `console` | WebSocket exec; `--root` uses the `/pooka/v1` exec route with `root=true` |
 | `push` | `PUT .../fs/write`, then `POST .../fs/chown` to `pooka:pooka` |
 | `pull` | `GET .../fs/read` |
 | `checkpoint` | `POST .../checkpoint` stream, then `GET .../checkpoints` for the id |

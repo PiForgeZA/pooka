@@ -24,6 +24,9 @@ func (s *Server) pookaRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /pooka/v1/sprites/{name}/start", s.startSprite)
 	mux.HandleFunc("POST /pooka/v1/sprites/{name}/stop", s.stopSprite)
 	mux.HandleFunc("DELETE /pooka/v1/sprites/{name}/checkpoints/{id}", s.deleteCheckpoint)
+	// Same exec protocol as /v1, plus root=true to run as root inside the environment.
+	mux.HandleFunc("GET /pooka/v1/sprites/{name}/exec", s.execGet)
+	mux.HandleFunc("POST /pooka/v1/sprites/{name}/exec", s.execPost)
 	mux.HandleFunc("/pooka/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such pooka extension: "+r.Method+" "+r.URL.Path)
 	})

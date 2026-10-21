@@ -454,9 +454,17 @@ func (b *Backend) Exec(ctx context.Context, name string, cmd []string, o backend
 		inner = "export " + k + "=" + host.ShellQuote(v) + "; " + inner
 	}
 	var args []string
-	if o.Root {
+	switch {
+	case o.Root:
 		args = attach(strconv.Itoa(r.VMID), "sh", "-lc", inner)
-	} else {
+	case o.TTY || o.PTY != nil:
+		// runuser -c starts a new session, which drops the controlling terminal:
+		// bash then warns "no job control in this shell" and Ctrl-C does not reach
+		// the foreground job. --session-command keeps the session that lxc-attach
+		// gave its pty to. The pty is private to this exec, so the tty-hijack
+		// concern behind "-c" does not apply.
+		args = attach(strconv.Itoa(r.VMID), "runuser", "-l", "pooka", "--session-command", inner)
+	default:
 		args = attach(strconv.Itoa(r.VMID), "runuser", "-l", "pooka", "-c", inner)
 	}
 	return b.h.Run(ctx, host.Cmd{Args: args, Stdin: o.Stdin, Stdout: o.Stdout, Stderr: o.Stderr, TTY: o.TTY, PTY: o.PTY})

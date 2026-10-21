@@ -358,3 +358,16 @@ func TestFsChown(t *testing.T) {
 		t.Errorf("chown bad owner: %d", resp.StatusCode)
 	}
 }
+
+func TestExecRootOnlyViaExtension(t *testing.T) {
+	ts, fb := newTestServer(t)
+	if resp, _ := do(t, ts, "POST", "/pooka/v1/sprites/dev1/exec?cmd=id&root=true", nil, "secret"); resp.StatusCode != 200 {
+		t.Fatalf("extension exec: %d", resp.StatusCode)
+	}
+	if resp, _ := do(t, ts, "POST", "/v1/sprites/dev1/exec?cmd=id&root=true", nil, "secret"); resp.StatusCode != 200 {
+		t.Fatalf("spec exec: %d", resp.StatusCode)
+	}
+	if len(fb.Root) != 2 || !fb.Root[0] || fb.Root[1] {
+		t.Errorf("root must apply on /pooka/v1 only: %v", fb.Root)
+	}
+}

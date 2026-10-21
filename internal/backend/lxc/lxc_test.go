@@ -284,3 +284,23 @@ func assertOrder(t *testing.T, calls, want []string) {
 		t.Errorf("missing %q in order.\ncalls:\n  %s", want[i], strings.Join(calls, "\n  "))
 	}
 }
+
+func TestExecTTYKeepsSession(t *testing.T) {
+	f := newFake()
+	f.On("lxc-attach -n 9100 --clear-env --keep-var TERM -- runuser -l pooka --session-command bash -l", "")
+	if _, err := newBackend(f).Exec(context.Background(), "dev1", []string{"bash", "-l"}, backend.ExecOptions{TTY: true}); err != nil {
+		t.Fatal(err)
+	}
+	last := f.Calls[len(f.Calls)-1]
+	if !strings.Contains(last, "--session-command bash -l") || strings.Contains(last, " -c ") {
+		t.Errorf("tty exec must keep the session: %s", last)
+	}
+	f = newFake()
+	f.On("lxc-attach -n 9100 --clear-env --keep-var TERM -- runuser -l pooka -c true", "")
+	if _, err := newBackend(f).Exec(context.Background(), "dev1", []string{"true"}, backend.ExecOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if last := f.Calls[len(f.Calls)-1]; !strings.Contains(last, "runuser -l pooka -c true") {
+		t.Errorf("non-tty exec keeps -c: %s", last)
+	}
+}

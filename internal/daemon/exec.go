@@ -49,6 +49,7 @@ type execParams struct {
 	cmd   []string
 	stdin bool
 	tty   bool
+	root  bool // only through the /pooka/v1 exec route
 	env   []string
 	dir   string
 	size  host.Winsize
@@ -75,6 +76,9 @@ func parseExecParams(r *http.Request) (execParams, error) {
 	}
 	p.stdin = q.Get("stdin") == "true"
 	p.tty = q.Get("tty") == "true"
+	// root is a pooka extension: honoured only on the /pooka/v1 route so the
+	// Sprites endpoint keeps the spec's meaning (ADR 0005).
+	p.root = strings.HasPrefix(r.URL.Path, "/pooka/") && q.Get("root") == "true"
 	return p, nil
 }
 
@@ -174,7 +178,7 @@ func (s *Server) execPost(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	fw := &frameWriter{w: w}
-	code, err := s.Backend.Exec(ctx, name, p.cmd, backend.ExecOptions{Stdin: stdin, Stdout: fw.stream(frameStdout), Stderr: fw.stream(frameStderr), Env: p.env, Dir: p.dir})
+	code, err := s.Backend.Exec(ctx, name, p.cmd, backend.ExecOptions{Stdin: stdin, Stdout: fw.stream(frameStdout), Stderr: fw.stream(frameStderr), Env: p.env, Dir: p.dir, Root: p.root})
 	if err != nil {
 		fw.write(frameStderr, []byte(err.Error()+"\n"))
 		code = 1
@@ -278,7 +282,7 @@ func (s *Server) execWS(w http.ResponseWriter, r *http.Request) {
 
 	stdinR, stdinW := io.Pipe()
 	resize := make(chan host.Winsize, 4)
-	opts := backend.ExecOptions{Stdout: stdout, Stderr: stderr, Env: p.env, Dir: p.dir}
+	opts := backend.ExecOptions{Stdout: stdout, Stderr: stderr, Env: p.env, Dir: p.dir, Root: p.root}
 	if p.stdin || p.tty {
 		opts.Stdin = stdinR
 	}

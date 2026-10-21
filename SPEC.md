@@ -131,7 +131,7 @@ Each command maps to `pct` calls on the host over SSH. The table gives the mappi
 |---|---|
 | `pooka create <name>` | Section 9. |
 | `pooka ls` | `pct list`, filtered by the `pooka` tag. Show name, VMID, status, IP. |
-| `pooka exec <name> -- <cmd...>` | `lxc-attach -n <vmid> --clear-env -- runuser -l pooka -c '<cmd...>'`. Add `-t` for a TTY. `--root` runs as root. `lxc-attach` is what `pct exec` wraps, without 0.5 s of perl startup per call. |
+| `pooka exec <name> -- <cmd...>` | `lxc-attach -n <vmid> --clear-env -- runuser -l pooka -c '<cmd...>'`. Add `-t` for a TTY; then `--session-command` replaces `-c`. `--root` runs as root. `lxc-attach` is what `pct exec` wraps, without 0.5 s of perl startup per call. |
 | `pooka console <name>` | `exec` of `bash -l` with a TTY. |
 | `pooka push <name> <local> <remote>` | `scp` to host, then `pct push`. |
 | `pooka pull <name> <remote> <local>` | `pct pull`, then `scp` from host. |
@@ -150,9 +150,11 @@ Rules:
 - `restore` and `destroy` ask the user to type the name. The `--force` flag skips this.
 - `exec` returns the exit code of the command inside the environment.
 - All commands accept `-n <name>` as an alternative to the positional name.
-- Over the daemon, `exec --root` runs the command with `sudo -n` inside the
-  environment. The Sprites API has no run-as-root option. The `pooka` user has
-  passwordless sudo, so the result is the same.
+- Over the daemon, `exec --root` uses the pooka extension route
+  `/pooka/v1/sprites/{name}/exec?root=true`. The Sprites API has no run-as-root
+  option.
+- With a TTY, `exec` keeps the session that `lxc-attach` gave its terminal to
+  (`runuser --session-command`), so the shell has job control and Ctrl-C works.
 - Over the daemon, `create` sends only the flags the user set. Unset flags take the
   daemon's defaults from `/etc/pooka/pookad.yaml`, not the client config.
 - Over the daemon, `push` is limited to 16 MB per file. Use `--transport ssh` for
