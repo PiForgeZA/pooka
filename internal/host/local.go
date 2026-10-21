@@ -36,15 +36,18 @@ func runPTY(c *exec.Cmd, cmd Cmd) (int, error) {
 	if size.Rows == 0 || size.Cols == 0 {
 		size = &pty.Winsize{Rows: 24, Cols: 80}
 	}
-	ptmx, err := pty.StartWithSize(c, size)
+	f, err := pty.StartWithSize(c, size)
 	if err != nil {
 		return -1, fmt.Errorf("start pty: %w", err)
 	}
+	ptmx := &guardedPTY{f: f}
 	defer ptmx.Close()
 
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	if cmd.Stdin != nil {
+		// Not joined: it may block in cmd.Stdin.Read after the process exits. The
+		// guard makes its late writes harmless.
 		go func() {
 			_, _ = io.Copy(ptmx, cmd.Stdin)
 			// Stdin closed: send EOT so a shell exits, then let the process decide.
@@ -52,14 +55,16 @@ func runPTY(c *exec.Cmd, cmd Cmd) (int, error) {
 		}()
 	}
 	if cmd.PTY.Resize != nil {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			for {
 				select {
 				case ws, ok := <-cmd.PTY.Resize:
 					if !ok {
 						return
 					}
-					_ = pty.Setsize(ptmx, &pty.Winsize{Rows: ws.Rows, Cols: ws.Cols})
+					ptmx.Setsize(ws)
 				case <-done:
 					return
 				}
@@ -70,13 +75,48 @@ func runPTY(c *exec.Cmd, cmd Cmd) (int, error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = io.Copy(cmd.Stdout, ptmx) // returns on EIO when the slave closes
+			_, _ = io.Copy(cmd.Stdout, f) // returns on EIO when the slave closes
 		}()
 	}
 	err = c.Wait()
 	close(done)
 	wg.Wait()
 	return exitCode(err)
+}
+
+// guardedPTY serialises writes, resizes and close on the pty master so a late write
+// from the stdin goroutine cannot race with Close.
+type guardedPTY struct {
+	mu     sync.Mutex
+	f      *os.File
+	closed bool
+}
+
+func (g *guardedPTY) Write(p []byte) (int, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return 0, os.ErrClosed
+	}
+	return g.f.Write(p)
+}
+
+func (g *guardedPTY) Setsize(ws Winsize) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.closed {
+		_ = pty.Setsize(g.f, &pty.Winsize{Rows: ws.Rows, Cols: ws.Cols})
+	}
+}
+
+func (g *guardedPTY) Close() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return nil
+	}
+	g.closed = true
+	return g.f.Close()
 }
 
 func exitCode(err error) (int, error) {
