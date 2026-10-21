@@ -83,7 +83,14 @@ disk_gb: 32
 cores: 4
 memory_mb: 8192
 ssh_pubkey: ~/.ssh/id_ed25519.pub
+daemon_url: http://proxmox:7700   # optional; selects the daemon transport
+token_file: ~/.config/pooka/token # or token: <value>
 ```
+
+Transport selection (ADR 0005): if `daemon_url` is set, commands go to `pookad` over
+HTTP. Otherwise they go over SSH. `--transport ssh|daemon` on any command forces one.
+The environment variables `SPRITES_API_URL` and `SPRITE_TOKEN` override `daemon_url`
+and `token`, so one shell serves both `pooka` and the official `sprite` CLI.
 
 The template runs an SSH server that accepts keys only and refuses root. `create` passes
 the public key named by `ssh_pubkey` to the firstboot script as `POOKA_SSH_PUBKEY`. The
@@ -124,7 +131,7 @@ Each command maps to `pct` calls on the host over SSH. The table gives the mappi
 |---|---|
 | `pooka create <name>` | Section 9. |
 | `pooka ls` | `pct list`, filtered by the `pooka` tag. Show name, VMID, status, IP. |
-| `pooka exec <name> -- <cmd...>` | `lxc-attach -n <vmid> --clear-env -- runuser -l pooka -c '<cmd...>'`. Add `-t` for a TTY. `--root` runs as root. `lxc-attach` is what `pct exec` wraps, without 0.5 s of perl startup per call. |
+| `pooka exec <name> -- <cmd...>` | `lxc-attach -n <vmid> --clear-env -- runuser -l pooka -c '<cmd...>'`. Add `-t` for a TTY; then `--session-command` replaces `-c`. `--root` runs as root. `lxc-attach` is what `pct exec` wraps, without 0.5 s of perl startup per call. |
 | `pooka console <name>` | `exec` of `bash -l` with a TTY. |
 | `pooka push <name> <local> <remote>` | `scp` to host, then `pct push`. |
 | `pooka pull <name> <remote> <local>` | `pct pull`, then `scp` from host. |
@@ -143,6 +150,15 @@ Rules:
 - `restore` and `destroy` ask the user to type the name. The `--force` flag skips this.
 - `exec` returns the exit code of the command inside the environment.
 - All commands accept `-n <name>` as an alternative to the positional name.
+- Over the daemon, `exec --root` uses the pooka extension route
+  `/pooka/v1/sprites/{name}/exec?root=true`. The Sprites API has no run-as-root
+  option.
+- With a TTY, `exec` keeps the session that `lxc-attach` gave its terminal to
+  (`runuser --session-command`), so the shell has job control and Ctrl-C works.
+- Over the daemon, `create` sends only the flags the user set. Unset flags take the
+  daemon's defaults from `/etc/pooka/pookad.yaml`, not the client config.
+- Over the daemon, `push` is limited to 16 MB per file. Use `--transport ssh` for
+  larger files.
 
 ## 11. Name to VMID lookup
 
@@ -152,14 +168,22 @@ only source of truth.
 
 ## 12. Transport
 
-Phase 1 runs `pct` over SSH. The CLI uses the system `ssh` binary so existing keys,
-agents and config work. It enables SSH connection multiplexing (`ControlMaster`) so one
-handshake serves every call in a command. Put this behind an interface named `Host`
-with `Run(ctx, cmd)`, `CopyTo` and `CopyFrom`. Set `POOKA_DEBUG=1` to log every host
-call with its duration.
+The CLI has two transports. Commands see only the `Backend` interface (section 13)
+and must not depend on either.
 
-Phase 2 replaces this with an HTTP client to a daemon on the host. Commands must not
-depend on SSH details.
+SSH: the CLI runs `pct` over the system `ssh` binary so existing keys, agents and
+config work. It enables SSH connection multiplexing (`ControlMaster`) so one handshake
+serves every call in a command. This sits behind an interface named `Host` with
+`Run(ctx, cmd)`, `CopyTo` and `CopyFrom`. Template builds always use SSH.
+
+Daemon: the CLI is an HTTP and WebSocket client of `pookad` (section 16). The
+`httpapi` backend maps each `Backend` method to a Sprites endpoint, or to a pooka
+extension under `/pooka/v1` where Sprites has none: create with options, start,
+stop and delete checkpoint. TTY exec puts the local terminal in raw mode and forwards
+window size changes.
+
+Section 8 gives the selection rule. Set `POOKA_DEBUG=1` to log every host call or
+daemon request with its duration.
 
 ## 13. Backend interface
 
@@ -205,14 +229,41 @@ all others within target.
 | restore | under 10 s |
 | exec `true` | under 1 s |
 
-## 16. Later phases
+## 16. Phase 2: the daemon
 
-These are not part of phase 1. They set the direction.
+`pookad` runs on the host and serves the Sprites HTTP and WebSocket API. See ADR 0004
+and docs/sprites-api/README.md for the endpoint map and the compatibility probe.
 
-- Phase 2: a daemon on the host that implements the Sprites OpenAPI spec. The official
-  `sprite` CLI and SDKs may then target pooka.
-- Phase 3: a reverse proxy with a wildcard domain. A request to an environment's URL
-  starts it. Idle environments stop after a timeout.
+- Install with `scripts/install-daemon.sh <pookad binary>`. It writes
+  `/etc/pooka/pookad.yaml`, generates `/etc/pooka/token`, and enables a systemd unit.
+- Listens on `0.0.0.0:7700` by default. Plain HTTP. The LAN is the trust boundary.
+- One bearer token. One organization, `local`.
+- The official `sprite` CLI and SDKs target pooka with three environment variables:
+  `SPRITES_API_URL=http://<host>:7700`, `SPRITE_TOKEN=<token>`, `SPRITE_ORG=local`.
+- Implemented: sprites list, create, get, update (no-op), delete; checkpoint create,
+  list, get, restore; exec over WebSocket with TTY, stdin and resize; exec over HTTP
+  POST with framed output; filesystem read, write, list and chown; session list and
+  kill.
+- pooka extensions under `/pooka/v1`, for the `pooka` CLI only (ADR 0005): create
+  with `cores`, `memory_mb`, `disk_gb` and `ssh_pubkey`; start; stop; delete
+  checkpoint. docs/sprites-api/README.md lists them.
+- Not implemented, returns 501: policies, services, OAuth connections, proxy, watch.
+- Known limitation: attaching to an existing exec session returns 404. The official
+  CLI's `exec --no-stdin` mode needs it. Use `--stdin` or `--http-post`.
+- Status mapping: running is `running`; stopped is `cold`. No `warm`.
+- The daemon runs commands locally; the LXC backend is unchanged. `POOKA_DEBUG=1` on
+  the daemon logs every host call with its duration.
+- The backend reads containers from `pct list` and the config files, never from the
+  cluster resources endpoint, which lags several seconds behind changes.
+
+## 17. Later phases
+
+These are not part of phases 1 and 2. They set the direction.
+
+- Phase 2b, done: the `pooka` CLI talks to `pookad` when `daemon_url` is set. See
+  sections 8 and 12.
+- Phase 3: a reverse proxy with a wildcard domain and TLS. A request to an
+  environment's URL starts it. Idle environments stop after a timeout.
 - Phase 4: an agent inside the environment for streaming exec, PTY, file watch and
   services.
 - Phase 5: a QEMU backend on Proxmox, then a Firecracker backend beside Proxmox.

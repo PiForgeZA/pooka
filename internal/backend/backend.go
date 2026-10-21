@@ -8,15 +8,18 @@ import (
 	"io"
 	"regexp"
 	"time"
+
+	"github.com/PiForgeZA/pooka/internal/host"
 )
 
 // Env is one managed environment.
 type Env struct {
-	Name   string
-	VMID   int
-	Node   string
-	Status string // running, stopped
-	IP     string // empty when stopped or unknown
+	Name    string
+	VMID    int
+	Node    string
+	Status  string // running, stopped
+	IP      string // empty when stopped or unknown
+	Created time.Time
 }
 
 // Checkpoint is one saved filesystem state.
@@ -39,9 +42,11 @@ type ExecOptions struct {
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
-	TTY    bool
+	TTY    bool      // attach the local terminal (CLI use)
+	PTY    *host.PTY // run under a pseudo-terminal driven by Stdin and Stdout (daemon use)
 	Root   bool
 	Dir    string
+	Env    []string // KEY=VALUE, exported before the command runs
 }
 
 // Backend manages environments on one hypervisor type.

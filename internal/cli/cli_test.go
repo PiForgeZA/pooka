@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -21,7 +23,7 @@ type fakeBackend struct {
 func (f *fakeBackend) rec(s string) { f.calls = append(f.calls, s) }
 
 func (f *fakeBackend) Create(_ context.Context, name string, o backend.CreateOptions) (backend.Env, error) {
-	f.rec("create " + name)
+	f.rec(fmt.Sprintf("create %s cores=%d mem=%d disk=%d", name, o.Cores, o.MemoryMB, o.DiskGB))
 	return backend.Env{Name: name, VMID: 9100, IP: "10.0.0.5"}, nil
 }
 func (f *fakeBackend) List(context.Context) ([]backend.Env, error) { f.rec("list"); return f.envs, nil }
@@ -145,5 +147,55 @@ func TestCreatePrintsSummary(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "dev1 ready in") || !strings.Contains(out.String(), "VMID 9100") {
 		t.Errorf("output: %s", out.String())
+	}
+}
+
+func TestTransportSelection(t *testing.T) {
+	cases := []struct {
+		args      []string
+		daemonURL string
+		want      string
+	}{
+		{[]string{"ls"}, "", "ssh"},
+		{[]string{"ls"}, "http://proxmox:7700", "daemon"},
+		{[]string{"--transport", "ssh", "ls"}, "http://proxmox:7700", "ssh"},
+		{[]string{"ls", "--transport", "daemon"}, "", "daemon"},
+	}
+	for _, c := range cases {
+		fb := &fakeBackend{}
+		a, _, _ := newApp(fb, "", "")
+		a.Backend = nil
+		a.Cfg.DaemonURL = c.daemonURL
+		var opened string
+		a.Open = func(tr string) (backend.Backend, error) { opened = tr; return fb, nil }
+		if code := a.Execute(context.Background(), c.args); code != 0 {
+			t.Errorf("%v: exit %d", c.args, code)
+		}
+		if opened != c.want || a.Transport != c.want {
+			t.Errorf("%v with daemon_url=%q: opened %q, want %q", c.args, c.daemonURL, opened, c.want)
+		}
+	}
+	a, _, errb := newApp(&fakeBackend{}, "", "")
+	a.Backend = nil
+	a.Open = func(string) (backend.Backend, error) { return nil, errors.New("no daemon configured") }
+	if code := a.Execute(context.Background(), []string{"--transport", "daemon", "ls"}); code != 1 || !strings.Contains(errb.String(), "no daemon configured") {
+		t.Errorf("open error must surface: code %d stderr %q", code, errb.String())
+	}
+}
+
+func TestCreateOptionsPerTransport(t *testing.T) {
+	// SSH: config values travel. Daemon: only flags the user set travel.
+	fb := &fakeBackend{}
+	a, _, _ := newApp(fb, "", "")
+	a.Execute(context.Background(), []string{"create", "dev1", "--memory", "1024"})
+	if fb.calls[0] != "create dev1 cores=4 mem=1024 disk=32" {
+		t.Errorf("ssh: %v", fb.calls)
+	}
+	fb = &fakeBackend{}
+	a, _, _ = newApp(fb, "", "")
+	a.Cfg.DaemonURL = "http://proxmox:7700"
+	a.Execute(context.Background(), []string{"create", "dev1", "--memory", "1024"})
+	if fb.calls[0] != "create dev1 cores=0 mem=1024 disk=0" {
+		t.Errorf("daemon: %v", fb.calls)
 	}
 }

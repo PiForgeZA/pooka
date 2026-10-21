@@ -12,20 +12,27 @@ import (
 	"github.com/PiForgeZA/pooka/internal/host"
 )
 
-const resourcesJSON = `[
- {"vmid":100,"name":"other","status":"running","type":"lxc","tags":"calendar","node":"proxmox"},
- {"vmid":9000,"name":"pooka-template","status":"stopped","type":"lxc","tags":"pooka-template","node":"proxmox","template":1},
- {"vmid":9100,"name":"dev1","status":"running","type":"lxc","tags":"pooka","node":"proxmox"},
- {"vmid":9101,"name":"dev2","status":"stopped","type":"lxc","tags":"agent;pooka","node":"proxmox"},
- {"vmid":200,"name":"vm","status":"running","type":"qemu","tags":"pooka","node":"proxmox"}
-]`
+const pctList = `VMID       Status     Lock         Name
+100        running                 other
+9000       stopped                 pooka-template
+9100       running                 dev1
+9101       stopped    snapshot     dev2
+`
+
+const confOut = `/etc/pve/lxc/100.conf:tags: calendar
+/etc/pve/lxc/105.conf:#<div align='center'>
+/etc/pve/lxc/9000.conf:tags: pooka-template
+/etc/pve/lxc/9100.conf:#{"created"%3A"2026-10-20T12%3A00%3A00Z","pooka"%3A"dev"}
+/etc/pve/lxc/9100.conf:tags: pooka
+/etc/pve/lxc/9101.conf:tags: agent;pooka
+proxmox
+`
 
 func newFake() *host.Fake {
 	f := &host.Fake{}
-	f.On("pvesh get /cluster/resources", resourcesJSON)
-	f.On("pct list", "VMID       Status     Lock         Name\n100        running                 other\n9100       running                 dev1\n9101       stopped                 dev2\n")
-	f.On("pct status 9100", "status: running\n")
-	f.On("pct status 9101", "status: stopped\n")
+	f.On("pct list", pctList)
+	f.On("sh -c "+confScript, confOut)
+	f.On("sh -c ls /etc/pve/lxc /etc/pve/qemu-server", "100.conf\n105.conf\n9000.conf\n9100.conf\n9101.conf\n200.conf\n")
 	f.On("lxc-info -n 9100 -iH", "192.168.68.50\nfd00::1\n")
 	f.On("pct config", "rootfs: local-lvm:vm-9100-disk-0,size=16G\nhostname: dev1\n")
 	f.On("pvesh get /storage/local-lvm", `{"type":"lvmthin","storage":"local-lvm"}`)
@@ -38,7 +45,7 @@ func newBackend(f *host.Fake) *Backend {
 	return New(f, Options{Template: 9000, VMIDLow: 9100, VMIDHigh: 9199, Version: "test", Sleep: func(time.Duration) {}})
 }
 
-func TestListFiltersByTagAndType(t *testing.T) {
+func TestListFiltersByTag(t *testing.T) {
 	f := newFake()
 	envs, err := newBackend(f).List(context.Background())
 	if err != nil {
@@ -47,11 +54,17 @@ func TestListFiltersByTagAndType(t *testing.T) {
 	if len(envs) != 2 {
 		t.Fatalf("want 2 envs, got %+v", envs)
 	}
-	if envs[0].Name != "dev1" || envs[0].IP != "192.168.68.50" || envs[0].Status != "running" {
+	if envs[0].Name != "dev1" || envs[0].IP != "192.168.68.50" || envs[0].Status != "running" || envs[0].Node != "proxmox" {
 		t.Errorf("dev1 wrong: %+v", envs[0])
 	}
-	if envs[1].Name != "dev2" || envs[1].IP != "" {
+	if envs[0].Created.Format(time.RFC3339) != "2026-10-20T12:00:00Z" {
+		t.Errorf("dev1 created: %v", envs[0].Created)
+	}
+	if envs[1].Name != "dev2" || envs[1].IP != "" || envs[1].Status != "stopped" || !envs[1].Created.IsZero() {
 		t.Errorf("dev2 wrong: %+v", envs[1])
+	}
+	if f.Called("pvesh get /cluster/resources") {
+		t.Error("must not use the lagging cluster resources endpoint")
 	}
 }
 
@@ -87,6 +100,20 @@ func TestCreateSequence(t *testing.T) {
 	}
 }
 
+func TestCreateSkipsVMIDsWithConfigs(t *testing.T) {
+	f := newFake()
+	// 9102 has a QEMU config even though pct list does not show it.
+	f.Rules = append([]host.FakeRule{{Prefix: "sh -c ls /etc/pve/lxc", Stdout: "9100.conf\n9101.conf\n9102.conf\n"}}, f.Rules...)
+	f.On("lxc-attach -n 9103 --clear-env --keep-var TERM -- systemctl is-system-running", "running\n")
+	env, err := newBackend(f).Create(context.Background(), "dev3", backend.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env.VMID != 9103 {
+		t.Errorf("want 9103, got %d", env.VMID)
+	}
+}
+
 func TestCreateRefusesDuplicateAndBadName(t *testing.T) {
 	b := newBackend(newFake())
 	if _, err := b.Create(context.Background(), "dev1", backend.CreateOptions{}); !errors.Is(err, backend.ErrExists) {
@@ -101,9 +128,7 @@ func TestCreateRefusesDuplicateAndBadName(t *testing.T) {
 
 func TestCreateMissingTemplate(t *testing.T) {
 	f := newFake()
-	f.Rules = nil
-	f.On("pvesh get /cluster/resources", resourcesJSON)
-	f.OnExit("pct config 9000", 2, "Configuration file 'nodes/proxmox/lxc/9000.conf' does not exist")
+	f.Rules = append([]host.FakeRule{{Prefix: "pct config 9000", Exit: 2, Stderr: "Configuration file 'nodes/proxmox/lxc/9000.conf' does not exist"}}, f.Rules...)
 	_, err := newBackend(f).Create(context.Background(), "dev3", backend.CreateOptions{})
 	if err == nil || !strings.Contains(err.Error(), "build-template.sh") {
 		t.Errorf("want template hint, got %v", err)
@@ -124,12 +149,12 @@ func TestExecRunsAsPookaUser(t *testing.T) {
 	f := newFake()
 	var out bytes.Buffer
 	f.On("lxc-attach -n 9100 --clear-env --keep-var TERM -- runuser -l pooka -c", "hi\n")
-	code, err := newBackend(f).Exec(context.Background(), "dev1", []string{"echo", "hi there"}, backend.ExecOptions{Stdout: &out, Dir: "/work"})
+	code, err := newBackend(f).Exec(context.Background(), "dev1", []string{"echo", "hi there"}, backend.ExecOptions{Stdout: &out, Dir: "/work", Env: []string{"TERM=xterm", "bad key=1"}})
 	if err != nil || code != 0 {
 		t.Fatal(code, err)
 	}
 	last := f.Calls[len(f.Calls)-1]
-	if last != "lxc-attach -n 9100 --clear-env --keep-var TERM -- runuser -l pooka -c cd /work && echo 'hi there'" {
+	if last != "lxc-attach -n 9100 --clear-env --keep-var TERM -- runuser -l pooka -c export TERM=xterm; cd /work && echo 'hi there'" {
 		t.Errorf("got %q", last)
 	}
 	if out.String() != "hi\n" {
@@ -185,6 +210,23 @@ func TestStopUsesShutdownWithForce(t *testing.T) {
 	}
 }
 
+func TestStartActsOnLiveStatus(t *testing.T) {
+	f := newFake()
+	if err := newBackend(f).Start(context.Background(), "dev2"); err != nil {
+		t.Fatal(err)
+	}
+	if !f.Called("pct start 9101") {
+		t.Errorf("calls: %v", f.Calls)
+	}
+	f = newFake()
+	if err := newBackend(f).Start(context.Background(), "dev1"); err != nil {
+		t.Fatal(err)
+	}
+	if f.Called("pct start") {
+		t.Error("running env must not be started again")
+	}
+}
+
 func TestDestroyStopsThenPurges(t *testing.T) {
 	f := newFake()
 	if err := newBackend(f).Destroy(context.Background(), "dev1"); err != nil {
@@ -193,15 +235,16 @@ func TestDestroyStopsThenPurges(t *testing.T) {
 	assertOrder(t, f.Calls, []string{"pct stop 9100", "pct destroy 9100 --purge"})
 }
 
-func TestListCheckpointsSkipsCurrent(t *testing.T) {
+func TestListCheckpointsSkipsCurrentAndSortsByTime(t *testing.T) {
 	f := newFake()
-	f.On("pvesh get /nodes/proxmox/lxc/9100/snapshot", `[{"name":"cp-1700000000","snaptime":1700000000,"description":"before upgrade\n"},{"name":"current","description":"You are here!"}]`)
+	// pvesh returns hash order: the newest first here, then current, then the oldest.
+	f.On("pvesh get /nodes/proxmox/lxc/9100/snapshot", `[{"name":"cp-1700000900","snaptime":1700000900,"description":"later"},{"name":"current","description":"You are here!"},{"name":"cp-1700000000","snaptime":1700000000,"description":"before upgrade\n"}]`)
 	cps, err := newBackend(f).ListCheckpoints(context.Background(), "dev1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cps) != 1 || cps[0].ID != "cp-1700000000" || cps[0].Comment != "before upgrade" {
-		t.Errorf("got %+v", cps)
+	if len(cps) != 2 || cps[0].ID != "cp-1700000000" || cps[0].Comment != "before upgrade" || cps[1].ID != "cp-1700000900" {
+		t.Errorf("want oldest first without current, got %+v", cps)
 	}
 }
 
@@ -214,23 +257,10 @@ func TestPctErrorCarriesStderr(t *testing.T) {
 	}
 }
 
-func TestLiveStatusOverridesStaleResources(t *testing.T) {
-	f := newFake()
-	// resources says dev1 running; pct says stopped (just stopped, pvestatd lags).
-	f.Rules = append([]host.FakeRule{
-		{Prefix: "pct list", Stdout: "VMID Status Lock Name\n9100 stopped  dev1\n9101 stopped  dev2\n"},
-		{Prefix: "pct status 9100", Stdout: "status: stopped\n"},
-	}, f.Rules...)
-	b := newBackend(f)
-	envs, _ := b.List(context.Background())
-	if envs[0].Status != "stopped" {
-		t.Errorf("List: %+v", envs[0])
-	}
-	if err := b.Start(context.Background(), "dev1"); err != nil {
-		t.Fatal(err)
-	}
-	if !f.Called("pct start 9100") {
-		t.Error("Start must act on live status, not the stale resources status")
+func TestParsePctList(t *testing.T) {
+	rs := parsePctList(pctList)
+	if len(rs) != 4 || rs[3].VMID != 9101 || rs[3].Status != "stopped" || rs[3].Name != "dev2" {
+		t.Errorf("%+v", rs)
 	}
 }
 
@@ -252,5 +282,25 @@ func assertOrder(t *testing.T, calls, want []string) {
 	}
 	if i != len(want) {
 		t.Errorf("missing %q in order.\ncalls:\n  %s", want[i], strings.Join(calls, "\n  "))
+	}
+}
+
+func TestExecTTYKeepsSession(t *testing.T) {
+	f := newFake()
+	f.On("lxc-attach -n 9100 --clear-env --keep-var TERM -- runuser -l pooka --session-command bash -l", "")
+	if _, err := newBackend(f).Exec(context.Background(), "dev1", []string{"bash", "-l"}, backend.ExecOptions{TTY: true}); err != nil {
+		t.Fatal(err)
+	}
+	last := f.Calls[len(f.Calls)-1]
+	if !strings.Contains(last, "--session-command bash -l") || strings.Contains(last, " -c ") {
+		t.Errorf("tty exec must keep the session: %s", last)
+	}
+	f = newFake()
+	f.On("lxc-attach -n 9100 --clear-env --keep-var TERM -- runuser -l pooka -c true", "")
+	if _, err := newBackend(f).Exec(context.Background(), "dev1", []string{"true"}, backend.ExecOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if last := f.Calls[len(f.Calls)-1]; !strings.Contains(last, "runuser -l pooka -c true") {
+		t.Errorf("non-tty exec keeps -c: %s", last)
 	}
 }

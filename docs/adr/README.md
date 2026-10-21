@@ -21,3 +21,5 @@ Date: YYYY-MM-DD
 | [0001](0001-lxc-first-backend.md) | Phase 1 uses LXC through pct over SSH | accepted |
 | [0002](0002-sprites-compatible-surface.md) | Follow the Sprites vocabulary and API | accepted |
 | [0003](0003-clear-mmp-on-restore.md) | Clear the ext4 MMP block after rollback on LVM-thin | accepted |
+| [0004](0004-daemon-with-sprites-api.md) | Phase 2 daemon speaks the Sprites API; official CLI compatibility confirmed | accepted |
+| [0005](0005-cli-transport-and-pooka-extensions.md) | The CLI selects SSH or daemon transport; pooka extensions live under /pooka/v1 | accepted |

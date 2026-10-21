@@ -69,3 +69,27 @@ template services, mask units that are not needed in a container, shrink firstbo
 After the template rebuild at 32 GB: `pooka create` 8.7 s end to end (resources 0.9,
 config 0.6, clone 1.2, set 0.6, config 0.6, start 2.0, systemd ready wait 2.5, firstboot
 0.5). Remaining fat: the four `pct` calls at 0.55 s each, and the systemd wait.
+
+## 2026-10-21, through the daemon
+
+`sprite create` via the official CLI against pookad on the host: 7.9 s. The daemon runs
+`pct` locally, so the SSH round trips of the CLI path are gone; what remains is pct's
+own startup per call and the systemd ready wait.
+
+## 2026-10-21, pooka CLI over both transports (phase 2b)
+
+Wall-clock from the dev box (LXC 111 on the same host), one run each, container
+running unless noted. Same code path on the host for both transports.
+
+| Operation | SSH | Daemon | Note |
+|---|---|---|---|
+| create | 8.3 s | 7.9 s | |
+| checkpoint | 1.6 s | 3.5 s | daemon: `Get` before the stream (0.7 s) and the checkpoint list after it (1.3 s) to learn the id, per ADR 0005 |
+| restore | 7.2 s | 7.7 s | |
+| stop | 2.7 s | 2.7 s | |
+| start | 2.7 s | 2.7 s | |
+| exec `id` | under 1 s | under 1 s | |
+
+Checkpoint over the daemon misses the 3 s target by 0.5 s. Two fixes are available
+when it matters: drop the extra `Get` in the daemon's checkpoint handler, or put the
+new id on the stream's `complete` event as an extra field and skip the list.
