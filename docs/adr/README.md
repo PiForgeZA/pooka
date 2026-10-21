@@ -24,3 +24,4 @@ Date: YYYY-MM-DD
 | [0004](0004-daemon-with-sprites-api.md) | Phase 2 daemon speaks the Sprites API; official CLI compatibility confirmed | accepted |
 | [0005](0005-cli-transport-and-pooka-extensions.md) | The CLI selects SSH or daemon transport; pooka extensions live under /pooka/v1 | accepted |
 | [0006](0006-exec-process-lifetime.md) | Exec owns its process session | accepted |
+| [0007](0007-setup-command-and-installer.md) | `pooka setup` provisions the host; the host scripts ship inside the binary | accepted |
