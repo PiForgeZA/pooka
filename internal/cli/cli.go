@@ -34,9 +34,15 @@ type App struct {
 	Open func(transport string) (backend.Backend, error)
 	// Transport is the one in use, set before a command runs.
 	Transport string
-	In        io.Reader
-	Out       io.Writer
-	Err       io.Writer
+	// NewHost returns the SSH host for a target. `pooka setup` uses it before any
+	// config exists. Tests return a fake.
+	NewHost func(target string) host.Host
+	// OpenWith is Open for a config that is not the loaded one; setup verifies
+	// the config it just wrote. Tests return a fake.
+	OpenWith func(cfg config.Config, transport string) (backend.Backend, error)
+	In       io.Reader
+	Out      io.Writer
+	Err      io.Writer
 	// ActiveEnv returns the name from ./.pooka. Tests override it.
 	ActiveEnv func() string
 }
@@ -49,18 +55,24 @@ func NewApp() (*App, error) {
 	}
 	a := &App{Cfg: cfg, In: os.Stdin, Out: os.Stdout, Err: os.Stderr, ActiveEnv: config.ActiveEnv}
 	a.Open = func(t string) (backend.Backend, error) { return openBackend(cfg, t) }
+	a.OpenWith = openBackend
+	a.NewHost = newSSHHost
 	return a, nil
+}
+
+func newSSHHost(target string) host.Host {
+	var h host.Host = host.NewSSH(target)
+	if os.Getenv("POOKA_DEBUG") != "" {
+		h = host.Logged{Host: h, Out: os.Stderr}
+	}
+	return h
 }
 
 // openBackend builds the SSH+LXC backend or the HTTP client. ADR 0005.
 func openBackend(cfg config.Config, transport string) (backend.Backend, error) {
-	debug := os.Getenv("POOKA_DEBUG") != ""
 	switch transport {
 	case "ssh":
-		var h host.Host = host.NewSSH(cfg.Host)
-		if debug {
-			h = host.Logged{Host: h, Out: os.Stderr}
-		}
+		h := newSSHHost(cfg.Host)
 		return lxc.New(h, lxc.Options{Template: cfg.Template, VMIDLow: cfg.VMIDRange[0], VMIDHigh: cfg.VMIDRange[1], Version: Version}), nil
 	case "daemon":
 		if cfg.DaemonURL == "" {
@@ -73,7 +85,7 @@ func openBackend(cfg config.Config, transport string) (backend.Backend, error) {
 		c := httpapi.New(cfg.DaemonURL, tok)
 		c.UserAgent = "pooka/" + Version
 		c.Progress = os.Stderr
-		if debug {
+		if os.Getenv("POOKA_DEBUG") != "" {
 			c.Debug = os.Stderr
 		}
 		return c, nil
@@ -108,6 +120,9 @@ func (a *App) Root() *cobra.Command {
 	root.SetErr(a.Err)
 	root.PersistentFlags().String("transport", "", "ssh or daemon (default: daemon when daemon_url is set, else ssh)")
 	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
+		if cmd.Name() == "setup" {
+			return nil // setup makes the config a backend would need
+		}
 		a.Transport = a.transport(cmd)
 		if a.Backend != nil {
 			return nil
@@ -127,6 +142,7 @@ func (a *App) Root() *cobra.Command {
 		a.pushCmd(), a.pullCmd(),
 		a.checkpointCmd(), a.restoreCmd(),
 		a.startCmd(), a.stopCmd(), a.destroyCmd(), a.useCmd(),
+		a.setupCmd(),
 	)
 	return root
 }
