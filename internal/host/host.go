@@ -1,5 +1,5 @@
-// Package host runs commands on the Proxmox host. Phase 1 uses SSH.
-// Commands and backends must not depend on the transport.
+// Package host runs commands on the Proxmox host. The CLI uses SSH; the daemon runs
+// locally. Commands and backends must not depend on the transport.
 package host
 
 import (
@@ -7,6 +7,19 @@ import (
 	"io"
 	"strings"
 )
+
+// Winsize is a terminal size.
+type Winsize struct {
+	Rows, Cols uint16
+}
+
+// PTY asks for the command to run under a pseudo-terminal. Stdin is written to the
+// terminal, terminal output goes to Stdout, and Stderr is unused. Resize, if set,
+// delivers size changes while the command runs.
+type PTY struct {
+	Size   Winsize
+	Resize <-chan Winsize
+}
 
 // Cmd is one command to run on the host.
 type Cmd struct {
@@ -16,6 +29,9 @@ type Cmd struct {
 	Stderr io.Writer
 	// TTY attaches the local terminal. Stdin, Stdout and Stderr are ignored.
 	TTY bool
+	// PTY runs the command under a pseudo-terminal driven by Stdin and Stdout.
+	// Only the local host supports it.
+	PTY *PTY
 }
 
 // Host runs commands on the Proxmox host and copies files to and from it.

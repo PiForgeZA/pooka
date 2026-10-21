@@ -234,6 +234,21 @@ func TestLiveStatusOverridesStaleResources(t *testing.T) {
 	}
 }
 
+func TestListReadsCreatedTimes(t *testing.T) {
+	f := newFake()
+	f.On("sh -c grep -H '^#' /etc/pve/lxc/*.conf", "/etc/pve/lxc/9100.conf:#{\"created\"%3A\"2026-10-20T12%3A00%3A00Z\",\"pooka\"%3A\"dev\"}\n/etc/pve/lxc/105.conf:#<div align='center'>\n/etc/pve/lxc/105.conf:#  <a href='x'>\n")
+	envs, err := newBackend(f).List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envs[0].Created.Format(time.RFC3339) != "2026-10-20T12:00:00Z" {
+		t.Errorf("dev1 created: %v", envs[0].Created)
+	}
+	if !envs[1].Created.IsZero() {
+		t.Errorf("dev2 should have no created time: %v", envs[1].Created)
+	}
+}
+
 func TestParseRootfs(t *testing.T) {
 	v, s := parseRootfs("arch: amd64\nrootfs: local-lvm:vm-9100-disk-0,size=16G\n")
 	if v != "local-lvm:vm-9100-disk-0" || s != 16 {

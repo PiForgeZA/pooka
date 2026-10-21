@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -192,11 +194,41 @@ func (b *Backend) List(ctx context.Context) ([]backend.Env, error) {
 	if err != nil {
 		return nil, err
 	}
+	created := b.createdTimes(ctx)
 	envs := make([]backend.Env, 0, len(rs))
 	for _, r := range rs {
-		envs = append(envs, b.toEnv(ctx, r))
+		e := b.toEnv(ctx, r)
+		e.Created = created[r.VMID]
+		envs = append(envs, e)
 	}
 	return envs, nil
+}
+
+// createdTimes reads the description of every container config in one call, which is
+// far cheaper than `pct config` per container. Proxmox stores the description as
+// leading "#" comment lines in the config file, percent-encoded. Missing entries
+// stay zero.
+func (b *Backend) createdTimes(ctx context.Context) map[int]time.Time {
+	out := map[int]time.Time{}
+	raw, err := b.run(ctx, "sh", "-c", "grep -H '^#' /etc/pve/lxc/*.conf 2>/dev/null || true")
+	if err != nil {
+		return out
+	}
+	for _, l := range strings.Split(raw, "\n") {
+		// /etc/pve/lxc/9100.conf:#{"created"%3A...}
+		file, rest, ok := strings.Cut(l, ":#")
+		if !ok {
+			continue
+		}
+		vmid, err := strconv.Atoi(strings.TrimSuffix(path.Base(file), ".conf"))
+		if err != nil {
+			continue
+		}
+		if t := createdFromDescription(rest); !t.IsZero() {
+			out[vmid] = t
+		}
+	}
+	return out
 }
 
 func (b *Backend) Get(ctx context.Context, name string) (backend.Env, error) {
@@ -204,7 +236,41 @@ func (b *Backend) Get(ctx context.Context, name string) (backend.Env, error) {
 	if err != nil {
 		return backend.Env{}, err
 	}
-	return b.toEnv(ctx, r), nil
+	e := b.toEnv(ctx, r)
+	if cfg, err := b.run(ctx, "pct", "config", strconv.Itoa(r.VMID)); err == nil {
+		e.Created = parseCreated(cfg)
+	}
+	return e, nil
+}
+
+// parseCreated reads the creation time from `pct config` output, where the
+// description pooka wrote at create appears percent-encoded on one line.
+func parseCreated(config string) time.Time {
+	for _, l := range strings.Split(config, "\n") {
+		if d, ok := strings.CutPrefix(l, "description: "); ok {
+			if t := createdFromDescription(d); !t.IsZero() {
+				return t
+			}
+		}
+	}
+	return time.Time{}
+}
+
+// createdFromDescription decodes one percent-encoded description and returns the
+// "created" field of pooka's JSON, or zero.
+func createdFromDescription(d string) time.Time {
+	if u, err := url.PathUnescape(d); err == nil {
+		d = u
+	}
+	var meta struct {
+		Created string `json:"created"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(d)), &meta) == nil {
+		if t, err := time.Parse(time.RFC3339, meta.Created); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // freeVMID returns the lowest unused VMID in the configured range.
@@ -392,14 +458,23 @@ func (b *Backend) Exec(ctx context.Context, name string, cmd []string, o backend
 	if o.Dir != "" {
 		inner = "cd " + host.ShellQuote(o.Dir) + " && " + inner
 	}
+	for i := len(o.Env) - 1; i >= 0; i-- {
+		k, v, ok := strings.Cut(o.Env[i], "=")
+		if !ok || !envKeyRe.MatchString(k) {
+			continue
+		}
+		inner = "export " + k + "=" + host.ShellQuote(v) + "; " + inner
+	}
 	var args []string
 	if o.Root {
 		args = attach(strconv.Itoa(r.VMID), "sh", "-lc", inner)
 	} else {
 		args = attach(strconv.Itoa(r.VMID), "runuser", "-l", "pooka", "-c", inner)
 	}
-	return b.h.Run(ctx, host.Cmd{Args: args, Stdin: o.Stdin, Stdout: o.Stdout, Stderr: o.Stderr, TTY: o.TTY})
+	return b.h.Run(ctx, host.Cmd{Args: args, Stdin: o.Stdin, Stdout: o.Stdout, Stderr: o.Stderr, TTY: o.TTY, PTY: o.PTY})
 }
+
+var envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // attach builds an lxc-attach command. pct exec wraps the same call but pays about
 // 0.5 s of perl startup per invocation; lxc-attach takes under 10 ms.
