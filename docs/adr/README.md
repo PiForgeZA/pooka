@@ -25,3 +25,5 @@ Date: YYYY-MM-DD
 | [0005](0005-cli-transport-and-pooka-extensions.md) | The CLI selects SSH or daemon transport; pooka extensions live under /pooka/v1 | accepted |
 | [0006](0006-exec-process-lifetime.md) | Exec owns its process session | accepted |
 | [0007](0007-setup-command-and-installer.md) | `pooka setup` provisions the host; the host scripts ship inside the binary | accepted |
+| [0008](0008-urls-proxy-and-tls.md) | Each environment gets an HTTPS URL served by a proxy inside pookad | accepted |
+| [0009](0009-idle-stop.md) | Idle environments stop after a timeout, unless a TCP connection is open inside | accepted |

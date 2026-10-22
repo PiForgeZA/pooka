@@ -23,3 +23,4 @@ Sections: State, Facts needed to continue, Next steps in order, Suggested skills
 | [0004](0004-phase-2b-deploy-and-live-check.md) | Phase 2b deployed and verified live; commit, push, open the PR |
 | [0005](0005-phase-3-urls-wake-idle.md) | Phase 3: URL per environment, TLS, wake-on-request, idle stop |
 | [0006](0006-issue-3-exec-orphans.md) | Issue #3: exec process outlives the client (done, merged in v0.2.1) |
+| [0007](0007-phase-3-built-and-verified.md) | Phase 3 built and verified live on branch phase-3; review, commit, PR |

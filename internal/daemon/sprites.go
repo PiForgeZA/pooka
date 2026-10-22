@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -22,10 +24,24 @@ type spriteResponse struct {
 	LastRunningAt *string      `json:"last_running_at"`
 	URLSettings   *urlSettings `json:"url_settings,omitempty"`
 	Labels        []string     `json:"labels,omitempty"`
+	// Pooka carries fields the Sprites schema has no place for, under one key
+	// so a future Sprites field cannot collide with them (ADR 0005).
+	Pooka *pookaFields `json:"pooka,omitempty"`
 }
 
 type urlSettings struct {
 	Auth string `json:"auth"`
+}
+
+// pookaFields is the `pooka` object in a sprite response.
+type pookaFields struct {
+	IP          string  `json:"ip"`                     // empty when stopped
+	IdleTimeout *string `json:"idle_timeout,omitempty"` // Go duration; null means the daemon default
+}
+
+// updateRequest is the body of PUT /v1/sprites/{name} (Sprites UrlSettingsRequest).
+type updateRequest struct {
+	URLSettings *urlSettings `json:"url_settings"`
 }
 
 type spriteListResponse struct {
@@ -38,19 +54,29 @@ type spriteListResponse struct {
 }
 
 // toSprite maps a backend Env to the Sprites shape. Stopped environments report
-// "cold": pooka has no warm state in phase 2.
+// "cold": pooka has no warm state in phase 2. With a domain, the url is the
+// proxy URL whether the environment runs or not, because a request wakes it.
 func (s *Server) toSprite(e backend.Env) spriteResponse {
 	status := "cold"
-	url := ""
+	url := s.URLFor(e.Name)
 	if e.Status == "running" {
 		status = "running"
-		if e.IP != "" {
+		if url == "" && e.IP != "" {
 			url = "http://" + e.IP + ":8080"
 		}
 	}
 	created := ""
 	if !e.Created.IsZero() {
 		created = e.Created.UTC().Format(time.RFC3339)
+	}
+	auth := e.URLAuth
+	if auth == "" {
+		auth = "sprite"
+	}
+	ext := &pookaFields{IP: e.IP}
+	if e.IdleTimeout != nil {
+		d := e.IdleTimeout.String()
+		ext.IdleTimeout = &d
 	}
 	return spriteResponse{
 		ID:           fmt.Sprintf("sprite-%d", e.VMID),
@@ -60,7 +86,8 @@ func (s *Server) toSprite(e backend.Env) spriteResponse {
 		Status:       status,
 		CreatedAt:    created,
 		UpdatedAt:    created,
-		URLSettings:  &urlSettings{Auth: "sprite"},
+		URLSettings:  &urlSettings{Auth: auth},
+		Pooka:        ext,
 	}
 }
 
@@ -104,6 +131,7 @@ func (s *Server) createSprite(w http.ResponseWriter, r *http.Request) {
 		writeBackendError(w, err)
 		return
 	}
+	s.Touch(req.Name)
 	if env.Created.IsZero() {
 		env.Created = time.Now()
 	}
@@ -119,9 +147,26 @@ func (s *Server) getSprite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.toSprite(env))
 }
 
-// updateSprite accepts URL settings and ignores them: phase 2 has no URLs.
+// updateSprite stores url_settings.auth in the environment (ADR 0008) and
+// returns the sprite.
 func (s *Server) updateSprite(w http.ResponseWriter, r *http.Request) {
-	env, err := s.Backend.Get(r.Context(), r.PathValue("name"))
+	name := r.PathValue("name")
+	var req updateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if req.URLSettings != nil && req.URLSettings.Auth != "" {
+		if err := backend.ValidateURLAuth(req.URLSettings.Auth); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := s.Backend.Update(r.Context(), name, backend.Settings{URLAuth: req.URLSettings.Auth}); err != nil {
+			writeBackendError(w, err)
+			return
+		}
+	}
+	env, err := s.Backend.Get(r.Context(), name)
 	if err != nil {
 		writeBackendError(w, err)
 		return

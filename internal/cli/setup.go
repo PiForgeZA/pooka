@@ -43,8 +43,18 @@ type setupOptions struct {
 	BuildTemplate bool
 	Daemon        bool
 	DaemonURL     string
+	Domain        string // DNS suffix for environment URLs (ADR 0008); default <ip>.sslip.io
 	Pookad        string // local pookad binary to push instead of downloading a release
 	Yes           bool
+}
+
+// sslipDomain returns the sslip.io name that resolves to the address from any
+// public resolver: 192.168.68.200 becomes 192-168-68-200.sslip.io.
+func sslipDomain(ip string) string {
+	if ip == "" {
+		return ""
+	}
+	return strings.ReplaceAll(ip, ".", "-") + ".sslip.io"
 }
 
 func (a *App) setupCmd() *cobra.Command {
@@ -72,7 +82,8 @@ flags and defaults without asking.`,
 	f.StringVar(&o.SSHPubKey, "ssh-pubkey", detectSSHPubKey(a.Cfg.SSHPubKey), "public key to put in every environment")
 	f.BoolVar(&o.BuildTemplate, "build-template", true, "build the template on the host if it is missing")
 	f.BoolVar(&o.Daemon, "daemon", true, "install pookad on the host and use it as the transport")
-	f.StringVar(&o.DaemonURL, "daemon-url", "", "URL clients use for pookad (default http://<host ip>:7700)")
+	f.StringVar(&o.DaemonURL, "daemon-url", "", "URL clients use for pookad (default https://api.<domain>)")
+	f.StringVar(&o.Domain, "domain", "", "DNS suffix for environment URLs (default <host ip>.sslip.io)")
 	f.StringVar(&o.Pookad, "pookad", "", "push this local pookad binary instead of downloading the release")
 	f.BoolVarP(&o.Yes, "yes", "y", false, "do not ask; use the flags and defaults")
 	return c
@@ -329,6 +340,11 @@ func (a *App) runSetup(ctx context.Context, o setupOptions) error {
 				return err
 			}
 		}
+		if o.Domain == "" {
+			o.Domain = sslipDomain(facts.IP)
+		}
+		say("Environment URLs are https://<name>-local.<domain>. Any public resolver maps\n*.%s to this host. A LAN DNS can serve a shorter name with one wildcard record.", sslipDomain(facts.IP))
+		o.Domain = strings.Trim(strings.ToLower(p.ask("Domain for environment URLs", o.Domain)), ". ")
 		if err := a.installDaemon(ctx, h, o, facts); err != nil {
 			return err
 		}
@@ -344,12 +360,35 @@ func (a *App) runSetup(ctx context.Context, o setupOptions) error {
 			return err
 		}
 		say("Token saved to %s.", tokPath)
+		// The generated CA (ADR 0008). pookad writes it on its first start with a
+		// domain; the install script restarted it a moment ago.
+		var ca []byte
+		for i := 0; i < 10 && len(ca) == 0; i++ {
+			out, _ := hostOut(ctx, h, "cat", "/etc/pooka/tls/ca.pem")
+			if strings.Contains(out, "BEGIN CERTIFICATE") {
+				ca = []byte(out)
+			} else {
+				time.Sleep(500 * time.Millisecond)
+			}
+		}
+		if len(ca) > 0 {
+			if err := os.WriteFile(config.CAPath(), ca, 0o644); err != nil {
+				return err
+			}
+			say("Daemon CA saved to %s.", config.CAPath())
+		} else {
+			say("Warning: /etc/pooka/tls/ca.pem is not on the host; is the proxy disabled in /etc/pooka/pookad.yaml? Using plain HTTP on port 7700.")
+		}
 		if o.DaemonURL == "" {
-			o.DaemonURL = "http://" + facts.IP + ":7700"
+			if len(ca) > 0 && o.Domain != "" {
+				o.DaemonURL = "https://api." + o.Domain
+			} else {
+				o.DaemonURL = "http://" + facts.IP + ":7700"
+			}
 		}
 		o.DaemonURL = strings.TrimRight(p.ask("Daemon URL for clients", o.DaemonURL), "/")
-		if err := checkHealth(o.DaemonURL); err != nil {
-			say("Warning: %s/healthz did not answer: %v. Check the address and port 7700; the config is written anyway.", o.DaemonURL, err)
+		if err := checkHealth(o.DaemonURL, ca); err != nil {
+			say("Warning: %s/healthz did not answer: %v. Check the address, DNS and port; the config is written anyway.", o.DaemonURL, err)
 		} else {
 			say("Daemon answers at %s.", o.DaemonURL)
 		}
@@ -386,6 +425,11 @@ func (a *App) runSetup(ctx context.Context, o setupOptions) error {
 		}
 	}
 	say("\nNext:\n  pooka create dev1\n  pooka console dev1")
+	if cfg.DaemonURL != "" && strings.HasPrefix(cfg.DaemonURL, "https://") {
+		ca := config.CAPath()
+		say("  pooka url dev1 --open     # the environment's URL, port 8080 inside\n\nBrowsers trust %s after a one-time step, then a restart:\n  Linux, Chrome:  certutil -d sql:$HOME/.pki/nssdb -A -t \"C,,\" -n pooka -i %s   (libnss3-tools)\n  Linux, system:  sudo cp %s /usr/local/share/ca-certificates/pooka.crt && sudo update-ca-certificates\n  macOS:          security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db %s\n  Windows:        Import-Certificate -FilePath %s -CertStoreLocation Cert:\\CurrentUser\\Root\n  Firefox:        Settings > Privacy and Security > Certificates > Import",
+			ca, ca, ca, ca, ca)
+	}
 	return nil
 }
 
@@ -489,8 +533,8 @@ func (a *App) installDaemon(ctx context.Context, h host.Host, o setupOptions, fa
 	}
 	// pookad.yaml with the chosen defaults, unless the host already has one.
 	if _, err := hostOut(ctx, h, "test", "-f", "/etc/pooka/pookad.yaml"); err != nil {
-		y := fmt.Sprintf("# Written by pooka setup on %s. Every key is optional.\nlisten: 0.0.0.0:7700\ntoken_file: /etc/pooka/token\norg: local\ntemplate: %d\nvmid_range: [%d, %d]\ndisk_gb: %d\ncores: %d\nmemory_mb: %d\n",
-			time.Now().Format("2006-01-02"), o.Template, a.Cfg.VMIDRange[0], a.Cfg.VMIDRange[1], o.DiskGB, o.Cores, o.MemoryMB)
+		y := fmt.Sprintf("# Written by pooka setup on %s. Every key is optional.\nlisten: 0.0.0.0:7700\ntoken_file: /etc/pooka/token\norg: local\ntemplate: %d\nvmid_range: [%d, %d]\ndisk_gb: %d\ncores: %d\nmemory_mb: %d\n\n# Environment URLs (SPEC section 18): https://<name>-local.<domain> on proxy_listen.\n# Empty domain disables the proxy. tls_cert and tls_key replace the generated CA.\ndomain: %s\nproxy_listen: 0.0.0.0:443\nidle_timeout: 30m\n",
+			time.Now().Format("2006-01-02"), o.Template, a.Cfg.VMIDRange[0], a.Cfg.VMIDRange[1], o.DiskGB, o.Cores, o.MemoryMB, o.Domain)
 		local, err := os.CreateTemp("", "pookad-yaml-")
 		if err != nil {
 			return err
@@ -508,17 +552,22 @@ func (a *App) installDaemon(ctx context.Context, h host.Host, o setupOptions, fa
 		}
 		say("Wrote /etc/pooka/pookad.yaml.")
 	} else {
-		say("/etc/pooka/pookad.yaml exists on the host; keeping it.")
+		say("/etc/pooka/pookad.yaml exists on the host; keeping it. The install script adds the domain if the file has none.")
 	}
 	say("Installing pookad...")
-	if err := streamHost(ctx, h, a.Out, a.Err, "bash", hostScriptsDir+"/install-daemon.sh", hostScriptsDir+"/pookad"); err != nil {
+	// POOKA_DOMAIN tells install-daemon.sh which domain to add to a pookad.yaml
+	// that has none (a phase 2 file). The script is the one place that edits it.
+	if err := streamHost(ctx, h, a.Out, a.Err, "env", "POOKA_DOMAIN="+o.Domain, "bash", hostScriptsDir+"/install-daemon.sh", hostScriptsDir+"/pookad"); err != nil {
 		return fmt.Errorf("install-daemon.sh failed: %w", err)
 	}
 	return nil
 }
 
-func checkHealth(url string) error {
+func checkHealth(url string, ca []byte) error {
 	c := &http.Client{Timeout: 5 * time.Second}
+	if len(ca) > 0 {
+		c.Transport = transportWithCA(ca)
+	}
 	resp, err := c.Get(url + "/healthz")
 	if err != nil {
 		return err

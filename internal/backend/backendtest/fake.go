@@ -21,6 +21,13 @@ type Fake struct {
 	Created backend.CreateOptions // options of the last Create
 	Root    []bool                // Root flag of each Exec, parallel to its Calls entry
 	Pushed  map[string]string     // remote path -> contents written by Exec "cat > f"
+	// Established names the environments where the Exec of `ss` reports an
+	// established TCP connection, for idle-stop tests.
+	Established map[string]bool
+	// StartErr makes Start fail for a name, for wake-race tests.
+	StartErr map[string]error
+	// Gets counts Get calls per name, for cache tests. Get is not in Calls.
+	Gets map[string]int
 }
 
 // New returns a Fake with dev1 running, dev2 stopped and one checkpoint on dev1.
@@ -30,9 +37,32 @@ func New() *Fake {
 			"dev1": {Name: "dev1", VMID: 9100, Status: "running", IP: "10.0.0.5", Created: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)},
 			"dev2": {Name: "dev2", VMID: 9101, Status: "stopped"},
 		},
-		Cps:    map[string][]backend.Checkpoint{"dev1": {{ID: "cp-1", Time: time.Unix(1700000000, 0), Comment: "first"}}},
-		Pushed: map[string]string{},
+		Cps:         map[string][]backend.Checkpoint{"dev1": {{ID: "cp-1", Time: time.Unix(1700000000, 0), Comment: "first"}}},
+		Pushed:      map[string]string{},
+		Established: map[string]bool{},
+		Gets:        map[string]int{},
 	}
+}
+
+// Update merges non-empty settings into the environment, as the LXC backend does.
+func (f *Fake) Update(_ context.Context, name string, s backend.Settings) error {
+	e, ok := f.Envs[name]
+	if !ok {
+		return backend.ErrNotFound
+	}
+	if err := backend.ValidateURLAuth(s.URLAuth); err != nil {
+		return err
+	}
+	if s.URLAuth != "" {
+		e.URLAuth = s.URLAuth
+	}
+	if s.IdleTimeout != nil {
+		d := *s.IdleTimeout
+		e.IdleTimeout = &d
+	}
+	f.Envs[name] = e
+	f.Calls = append(f.Calls, "update "+name)
+	return nil
 }
 
 func (f *Fake) Create(_ context.Context, name string, o backend.CreateOptions) (backend.Env, error) {
@@ -44,6 +74,7 @@ func (f *Fake) Create(_ context.Context, name string, o backend.CreateOptions) (
 		return backend.Env{}, backend.ErrExists
 	}
 	e := backend.Env{Name: name, VMID: 9102, Status: "running", IP: "10.0.0.7", Created: time.Now()}
+	e.IdleTimeout = o.IdleTimeout
 	f.Envs[name] = e
 	f.Calls = append(f.Calls, "create "+name)
 	return e, nil
@@ -60,6 +91,7 @@ func (f *Fake) List(context.Context) ([]backend.Env, error) {
 }
 
 func (f *Fake) Get(_ context.Context, name string) (backend.Env, error) {
+	f.Gets[name]++
 	e, ok := f.Envs[name]
 	if !ok {
 		return backend.Env{}, backend.ErrNotFound
@@ -67,18 +99,35 @@ func (f *Fake) Get(_ context.Context, name string) (backend.Env, error) {
 	return e, nil
 }
 
+// Start marks the environment running. An environment without an IP gets
+// 10.0.0.6, as DHCP would give one.
 func (f *Fake) Start(_ context.Context, name string) error {
-	if _, ok := f.Envs[name]; !ok {
+	e, ok := f.Envs[name]
+	if !ok {
 		return backend.ErrNotFound
 	}
+	if err := f.StartErr[name]; err != nil {
+		f.Calls = append(f.Calls, "start "+name)
+		return err
+	}
+	e.Status = "running"
+	if e.IP == "" {
+		e.IP = "10.0.0.6"
+	}
+	f.Envs[name] = e
 	f.Calls = append(f.Calls, "start "+name)
 	return nil
 }
 
+// Stop marks the environment stopped. The IP is kept so a test can set one
+// before a wake.
 func (f *Fake) Stop(_ context.Context, name string) error {
-	if _, ok := f.Envs[name]; !ok {
+	e, ok := f.Envs[name]
+	if !ok {
 		return backend.ErrNotFound
 	}
+	e.Status = "stopped"
+	f.Envs[name] = e
 	f.Calls = append(f.Calls, "stop "+name)
 	return nil
 }
@@ -104,6 +153,12 @@ func (f *Fake) Exec(ctx context.Context, name string, cmd []string, o backend.Ex
 	if cmd[0] == "sleep" { // runs until the context ends, like a long-lived process
 		<-ctx.Done()
 		return 130, nil
+	}
+	if cmd[0] == "ss" { // the idle loop's connection check
+		if f.Established[name] {
+			io.WriteString(o.Stdout, "ESTAB 0 0 10.0.0.5:22 10.0.0.9:51234\n")
+		}
+		return 0, nil
 	}
 	var in []byte
 	if o.Stdin != nil {

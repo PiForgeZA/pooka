@@ -15,11 +15,12 @@ Irish folklore. This one lives on Proxmox.
 
 ## Status
 
-Alpha, phase 2. The CLI works end to end on one Proxmox host with LXC containers,
+Alpha, phase 3. The CLI works end to end on one Proxmox host with LXC containers,
 either through the `pookad` daemon or over plain SSH. The daemon also serves the
-Sprites API, so the official `sprite` CLI and SDKs work against it. Measured on a
-Proxmox 8.4 host with LVM-thin: create in about 8 s, checkpoint in 0.9 s, restore in
-about 7 s, exec round trip under 0.1 s.
+Sprites API, so the official `sprite` CLI and SDKs work against it. Every
+environment has an HTTPS URL that wakes it on request, and idle environments stop
+after a timeout. Measured on a Proxmox 8.4 host with LVM-thin: create in about 8 s,
+checkpoint in 0.9 s, restore in about 7 s, exec round trip under 0.1 s.
 
 Phase 1 trades hardware isolation for speed and simplicity: environments are LXC
 containers and share the host kernel. See [SPEC.md](SPEC.md) for the exact behaviour,
@@ -38,6 +39,9 @@ pooka start dev1
 pooka push dev1 ./notes.md /home/pooka/notes.md
 pooka pull dev1 /home/pooka/out.txt ./out.txt
 pooka use dev1                    # make dev1 the default for this directory (.pooka)
+pooka url dev1 --open             # https://dev1-local.<domain> -> port 8080 inside; wakes it
+pooka url dev1 --auth public      # let anyone who can reach the host open it
+pooka idle dev1 2h                # stop after 2 h without activity (default 30 min; off)
 pooka destroy dev1                # delete it and its checkpoints
 ```
 
@@ -84,10 +88,11 @@ pooka setup
 
 It connects to your Proxmox host over SSH, asks a few questions with defaults
 taken from the host (thin storage, bridge, template VMID, disk, cores, memory, your
-public key), builds the template if it is missing, installs the `pookad` daemon,
-saves its token, and writes `~/.config/pooka/config.yaml`. Every answer is also a
-flag; `pooka setup --yes` takes the defaults without asking, and `--daemon=false`
-keeps SSH as the transport.
+public key, the domain for environment URLs), builds the template if it is missing,
+installs the `pookad` daemon, saves its token and its CA certificate, and writes
+`~/.config/pooka/config.yaml`. Every answer is also a flag; `pooka setup --yes`
+takes the defaults without asking, and `--daemon=false` keeps SSH as the transport.
+It ends with the one-time command that makes your browser trust the CA.
 
 Then:
 
@@ -103,6 +108,22 @@ That is the whole quick start. The rest of this section is the manual route, whi
 
 `pooka ls` shows every environment. Add `POOKA_DEBUG=1` to any command to see each
 request or host call with its duration.
+
+Every environment has a URL, `https://<name>-local.<domain>`, served by the daemon
+on port 443 and routed to port 8080 inside the environment. A request to a stopped
+environment starts it and waits for the port. `pooka setup` defaults the domain to
+`<host-ip>.sslip.io`, which any public resolver maps to the host, so no DNS entry is
+needed on any client. By default only token holders may open a URL: `pooka url
+<name>` prints a link that sets a cookie for that host, and programs send
+`Authorization: Bearer <token>`. `pooka url <name> --auth public` opens it to anyone
+who can reach the host. The certificate comes from a CA the daemon generates;
+`pooka setup` saves it to `~/.config/pooka/ca.pem` and prints the one-time step
+that makes browsers trust it.
+
+An environment with no activity for 30 minutes stops. Activity is a URL request, an
+exec session, a file or checkpoint call, or any established TCP connection inside
+the environment, so an open SSH or IDE session keeps it up. `pooka idle <name> off`
+opts one out; `idle_timeout` in `/etc/pooka/pookad.yaml` sets the default.
 
 The official Sprites clients use the same daemon and token:
 
@@ -147,8 +168,11 @@ ssh root@proxmox cat /etc/pooka/token > ~/.config/pooka/token
 ```
 
 The script generates the token, writes `/etc/pooka/pookad.yaml` with the defaults
-for new environments, and starts a systemd unit on port 7700. The daemon speaks plain
-HTTP. Keep port 7700 on your LAN until phase 3 adds TLS.
+for new environments and a `domain` of `<host-ip>.sslip.io`, and starts a systemd
+unit. The daemon speaks plain HTTP on port 7700 and serves environment URLs and the
+API over TLS on port 443 with a CA it generates at `/etc/pooka/tls/ca.pem`. Copy that
+file to `~/.config/pooka/ca.pem` and point `daemon_url` at `https://api.<domain>`,
+or keep port 7700 on your LAN.
 
 If you would rather not run a daemon, skip this step. The CLI then runs `pct` over
 SSH, which needs root SSH access from every machine you use pooka on.
@@ -159,7 +183,8 @@ pooka reads `~/.config/pooka/config.yaml`. Every key has a default, shown here. 
 need the file for the two daemon keys; the rest only if your setup differs.
 
 ```yaml
-daemon_url: http://proxmox:7700       # set this to use the daemon
+daemon_url: https://api.192-168-68-200.sslip.io   # set this to use the daemon; or http://proxmox:7700
+# ca_file: ~/.config/pooka/ca.pem    # the daemon's CA for an https daemon_url; this is the default
 token_file: ~/.config/pooka/token     # or token: <value>
 host: root@proxmox                    # ssh target; used by --transport ssh and template builds
 template: 9000                        # VMID of the template container
@@ -189,8 +214,16 @@ everything by hand.
 
 Over the daemon, the CLI is a client of the Sprites API: list, create, destroy,
 checkpoints, a WebSocket for exec with a TTY, and the filesystem endpoints for push
-and pull. Four small pooka extensions under `/pooka/v1` cover start, stop, delete
-checkpoint and create with options, which the Sprites spec does not have.
+and pull. Five small pooka extensions under `/pooka/v1` cover start, stop, delete
+checkpoint, per-environment settings and create with options, which the Sprites
+spec does not have.
+
+The daemon's proxy on 443 routes on the first DNS label only: `dev1-local` in
+`dev1-local.192-168-68-200.sslip.io`. The rest of the name is ignored, so any name
+that resolves to the host works, including one on your own LAN DNS. The host name
+`api.<domain>` on the same listener serves the API over TLS. The URL auth setting
+and the idle timeout live in the container description, next to the creation time,
+so Proxmox stays the only state store (ADR 0008, 0009).
 
 - create: `pct clone` of the template, `pct set`, `pct start`, wait for systemd, run
   `/etc/pooka/firstboot.sh` with your SSH key.
@@ -213,7 +246,8 @@ conventional commit type.
 Layout: `cmd/pooka` and `cmd/pookad` are the mains, `internal/cli` the cobra
 commands, `internal/backend` the `Backend` interface, `internal/backend/lxc` the
 Proxmox implementation, `internal/backend/httpapi` the client of the daemon,
-`internal/daemon` the Sprites API server, `internal/host` the SSH and local
+`internal/daemon` the Sprites API server and the idle loop, `internal/proxy` the
+URL proxy, `internal/pki` the generated CA, `internal/host` the SSH and local
 transports with a scripted fake for tests. Read [AGENTS.md](AGENTS.md) before
 contributing; design decisions live in `docs/adr/`.
 
@@ -222,7 +256,7 @@ contributing; design decisions live in `docs/adr/`.
 1. LXC backend, CLI over SSH, template-based create, checkpoints. **Done, phase 1.**
 2. Host daemon with the Sprites OpenAPI surface so the official SDKs and CLI can target
    it; the pooka CLI uses it too. **Done, phase 2.**
-3. Per-environment HTTPS URL with wake-on-request and idle sleep.
+3. Per-environment HTTPS URL with wake-on-request and idle stop. **Done, phase 3.**
 4. In-environment agent: streaming exec, PTY, file watch, service supervisor.
 5. QEMU backend on Proxmox, then Firecracker beside Proxmox for hardware isolation.
 

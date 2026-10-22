@@ -93,3 +93,26 @@ running unless noted. Same code path on the host for both transports.
 Checkpoint over the daemon misses the 3 s target by 0.5 s. Two fixes are available
 when it matters: drop the extra `Get` in the daemon's checkpoint handler, or put the
 new id on the stream's `complete` event as an extra field and skip the list.
+
+## 2026-10-22, phase 3: URLs, wake on request, idle stop
+
+Same host. pookad built from the phase-3 branch, proxy on 443 with the generated CA,
+domain `192-168-68-200.sslip.io`. Measured from the dev container (LXC 111) with
+`curl --cacert ca.pem` and `POOKA_DEBUG=1`.
+
+| Operation | Measured | Target (SPEC §18) | Status |
+|---|---|---|---|
+| `pooka ls` over TLS at `api.<domain>` | 0.66 s | | same as plain HTTP on 7700 |
+| URL request, running environment, cookie auth | under 0.1 s | | |
+| URL request, `?token=` sets the cookie and redirects | 1 redirect | | |
+| **wake by URL request** (stopped, python http.server as a systemd unit) | **4.3 to 9.6 s** (two runs) | under 30 s, then 502 | ok |
+| second request, environment running | 0.004 s | | |
+| `pooka create --idle-timeout 2m` | 9.5 s | | create unchanged |
+
+The wake time is `pct start` (about 2.7 s) plus the container's boot to the point
+where the service listens on 8080 plus DHCP. The proxy polls the port every 250 ms, so
+the wait is the service's own start time, not a timer.
+
+The idle loop's connection check, `ss -Htn state established` run as root inside the
+container, lists an open SSH login from the LAN as one established line and nothing
+once the login ends. See the idle stop live check in handoff 0007.

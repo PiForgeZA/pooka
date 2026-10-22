@@ -37,6 +37,7 @@ func (s *Server) fsExec(r *http.Request, script string, args []string, stdin *by
 	if stdin != nil {
 		opts.Stdin = stdin
 	}
+	s.Touch(r.PathValue("name"))
 	code, err = s.Backend.Exec(r.Context(), r.PathValue("name"), cmd, opts)
 	return out.String(), errb.String(), code, err
 }

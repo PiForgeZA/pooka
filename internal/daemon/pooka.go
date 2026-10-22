@@ -2,8 +2,11 @@ package daemon
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/PiForgeZA/pooka/internal/backend"
 )
 
 // pooka extensions: endpoints the Sprites spec does not define. They live under
@@ -17,12 +20,23 @@ type createRequest struct {
 	MemoryMB  int    `json:"memory_mb"`
 	DiskGB    int    `json:"disk_gb"`
 	SSHPubKey string `json:"ssh_pubkey"`
+	// IdleTimeout is a Go duration such as "30m" or "0s". Empty means the daemon
+	// default (ADR 0009).
+	IdleTimeout string `json:"idle_timeout"`
+}
+
+// settingsRequest is the body of PUT /pooka/v1/sprites/{name}/settings. Empty
+// fields keep their value.
+type settingsRequest struct {
+	URLAuth     string `json:"url_auth"`
+	IdleTimeout string `json:"idle_timeout"`
 }
 
 func (s *Server) pookaRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /pooka/v1/sprites", s.createSpriteWithOptions)
 	mux.HandleFunc("POST /pooka/v1/sprites/{name}/start", s.startSprite)
 	mux.HandleFunc("POST /pooka/v1/sprites/{name}/stop", s.stopSprite)
+	mux.HandleFunc("PUT /pooka/v1/sprites/{name}/settings", s.updateSettings)
 	mux.HandleFunc("DELETE /pooka/v1/sprites/{name}/checkpoints/{id}", s.deleteCheckpoint)
 	// Same exec protocol as /v1, plus root=true to run as root inside the environment.
 	mux.HandleFunc("GET /pooka/v1/sprites/{name}/exec", s.execGet)
@@ -55,19 +69,76 @@ func (s *Server) createSpriteWithOptions(w http.ResponseWriter, r *http.Request)
 	if req.SSHPubKey != "" {
 		opts.SSHPubKey = req.SSHPubKey
 	}
+	if req.IdleTimeout != "" {
+		d, err := parseIdle(req.IdleTimeout)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		opts.IdleTimeout = &d
+	}
 	env, err := s.Backend.Create(r.Context(), req.Name, opts)
 	if err != nil {
 		writeBackendError(w, err)
 		return
 	}
+	s.Touch(req.Name)
 	if env.Created.IsZero() {
 		env.Created = time.Now()
 	}
 	writeJSON(w, http.StatusCreated, s.toSprite(env))
 }
 
+// parseIdle reads an idle timeout. Negative values are an error.
+func parseIdle(v string) (time.Duration, error) {
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		return 0, fmt.Errorf("invalid idle_timeout %q: use a duration such as 30m, or 0 for never", v)
+	}
+	return d, nil
+}
+
+// updateSettings writes url_auth and idle_timeout (ADR 0008, 0009) and returns
+// the sprite.
+func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var req settingsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	set := backend.Settings{URLAuth: req.URLAuth}
+	if err := backend.ValidateURLAuth(req.URLAuth); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.IdleTimeout != "" {
+		d, err := parseIdle(req.IdleTimeout)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		set.IdleTimeout = &d
+	}
+	if err := s.Backend.Update(r.Context(), name, set); err != nil {
+		writeBackendError(w, err)
+		return
+	}
+	env, err := s.Backend.Get(r.Context(), name)
+	if err != nil {
+		writeBackendError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.toSprite(env))
+}
+
 func (s *Server) startSprite(w http.ResponseWriter, r *http.Request) {
-	s.noContent(w, s.Backend.Start(r.Context(), r.PathValue("name")))
+	name := r.PathValue("name")
+	err := s.Backend.Start(r.Context(), name)
+	if err == nil {
+		s.Touch(name)
+	}
+	s.noContent(w, err)
 }
 
 func (s *Server) stopSprite(w http.ResponseWriter, r *http.Request) {

@@ -35,6 +35,7 @@ func (s *Server) createCheckpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	st := newStreamer(w)
 	ctx := context.WithoutCancel(r.Context()) // finish the snapshot even if the client leaves
+	s.Touch(name)
 	st.runStream(r.Context(), "Creating checkpoint...", func() (string, error) {
 		cp, err := s.Backend.Checkpoint(ctx, name, req.Comment)
 		if err != nil {
@@ -85,6 +86,7 @@ func (s *Server) restoreCheckpoint(w http.ResponseWriter, r *http.Request) {
 			return "", err
 		}
 		s.dropSessions(name)
+		s.Touch(name)
 		return "Restored to " + id, nil
 	})
 }
