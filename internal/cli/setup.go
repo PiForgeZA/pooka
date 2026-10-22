@@ -348,6 +348,16 @@ func (a *App) runSetup(ctx context.Context, o setupOptions) error {
 		if err := a.installDaemon(ctx, h, o, facts); err != nil {
 			return err
 		}
+		// The host's pookad.yaml is the truth for the domain: an existing file keeps
+		// its own (ADR 0007), and the certificate covers that one. The client URL
+		// must follow it, not the answer above.
+		if installed, _ := hostOut(ctx, h, "sed", "-n", "s/^domain: *//p", "/etc/pooka/pookad.yaml"); strings.TrimSpace(installed) != "" {
+			installed = strings.TrimSpace(strings.Split(strings.TrimSpace(installed), "\n")[0])
+			if installed != o.Domain {
+				say("The host keeps its existing domain %s (from /etc/pooka/pookad.yaml); URLs and the certificate use it. Edit that file to change it.", installed)
+				o.Domain = installed
+			}
+		}
 		tok, err := hostOut(ctx, h, "cat", "/etc/pooka/token")
 		if err != nil {
 			return fmt.Errorf("read the daemon token: %w", err)

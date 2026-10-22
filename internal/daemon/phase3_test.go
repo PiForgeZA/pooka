@@ -202,6 +202,35 @@ func TestIdlePerEnvironmentTimeout(t *testing.T) {
 	}
 }
 
+func TestActivityFromRequests(t *testing.T) {
+	fb := backendtest.New()
+	s := New(fb, "secret")
+	now := time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+	s.Now = func() time.Time { return now }
+	s.started = now
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	cases := []struct {
+		method, path string
+		active       bool
+	}{
+		{"GET", "/v1/sprites/dev1/fs/read?path=/etc/hostname", true},
+		{"GET", "/v1/sprites/dev1/fs/list?path=/", true},
+		{"POST", "/pooka/v1/sprites/dev1/start", true},
+		{"GET", "/v1/sprites/dev1", false},
+		{"GET", "/v1/sprites/dev1/checkpoints", false},
+		{"GET", "/v1/sprites", false},
+	}
+	for _, c := range cases {
+		now = now.Add(time.Minute)
+		do(t, ts, c.method, c.path, nil, "secret")
+		got := s.lastActivity("dev1").Equal(now)
+		if got != c.active {
+			t.Errorf("%s %s: activity recorded %v, want %v", c.method, c.path, got, c.active)
+		}
+	}
+}
+
 func TestIdleDisabledByDefault(t *testing.T) {
 	s, _, now := newIdleServer(t)
 	s.IdleTimeout = 0

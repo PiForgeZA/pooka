@@ -80,6 +80,20 @@ lived in two places, `Update` re-read the config, shutdown cut proxied requests.
 Left as is: `url --auth` and `idle` call `Update` then `Get`; the interface returns
 only an error, as SPEC 18.6 says.
 
+## After the PR opened
+
+- CI caught a data race in the test fake (`Get` wrote a map with no lock) and a
+  repeated run found a double start on a concurrent wake. Both fixed in `e0c1bed`:
+  the fake takes a mutex, the wake leader checks the live status before `Start`.
+- An architecture review (improve-codebase-architecture skill) raised two points,
+  both applied: `fs/read` now records activity like the other filesystem calls, and
+  `pooka setup` reads the installed domain back from the host's pookad.yaml so
+  `daemon_url` follows the certificate when an existing file keeps its own domain.
+  SPEC 18.5 now says that information reads (`ls`, get, checkpoint list) are not
+  activity. The review's larger suggestion, one module that owns activity policy
+  and the idle decision instead of `Touch` calls in each handler, is a refactor for
+  a later pass.
+
 ## Next steps in order
 
 1. Review `git diff main`. Commit on `phase-3` as `feat: environment URLs, wake on

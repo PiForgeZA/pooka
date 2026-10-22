@@ -85,6 +85,28 @@ func TestSetupAddsDomainToExistingPookadYAML(t *testing.T) {
 	}
 }
 
+func TestSetupFollowsTheInstalledDomain(t *testing.T) {
+	fh := setupHost()
+	fh.Rules = append([]host.FakeRule{
+		{Prefix: "pct config 9000", Stdout: "template: 1\n"},
+		{Prefix: "test -f /etc/pooka/pookad.yaml", Stdout: ""},
+		{Prefix: "sed -n s/^domain: *//p /etc/pooka/pookad.yaml", Stdout: "pooka.piforge.internal\n"},
+	}, fh.Rules...)
+	a, out, _ := newSetupApp(t, fh, "")
+	bin := filepath.Join(t.TempDir(), "pookad")
+	os.WriteFile(bin, []byte("bin"), 0o755)
+	if code := a.Execute(context.Background(), []string{"setup", "--yes", "--pookad", bin, "--domain", "other.example"}); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out())
+	}
+	cfg, _ := config.Load()
+	if cfg.DaemonURL != "https://api.pooka.piforge.internal" {
+		t.Errorf("daemon_url must follow the host's domain, got %s", cfg.DaemonURL)
+	}
+	if s := out(); !strings.Contains(s, "keeps its existing domain pooka.piforge.internal") {
+		t.Errorf("output:\n%s", s)
+	}
+}
+
 func TestSslipDomain(t *testing.T) {
 	if got := sslipDomain("192.168.68.200"); got != "192-168-68-200.sslip.io" {
 		t.Error(got)

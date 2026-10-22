@@ -347,8 +347,10 @@ ADR 0008 and ADR 0009 record the decisions.
 ### 18.5 Idle stop
 
 - Activity for an environment is: a proxy request, an open exec session, a
-  filesystem call, a checkpoint call, a start, or a daemon start. The daemon keeps
-  the time of the last activity in memory.
+  filesystem read or write, a checkpoint create or restore, a start, or a daemon
+  start. The daemon keeps the time of the last activity in memory. Reads of
+  information are not activity: `pooka ls`, `GET /v1/sprites/{name}` and checkpoint
+  lists do not keep an environment awake.
 - Every minute the daemon checks each running environment. If its last activity is
   older than its idle timeout, the daemon runs `ss -Htn state established` inside
   it. If the output is empty, the daemon stops the environment the way `pooka stop`
