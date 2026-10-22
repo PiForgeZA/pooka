@@ -7,14 +7,18 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PiForgeZA/pooka/internal/backend"
 )
 
 // Fake is an in-memory Backend. Exec echoes stdin, prints its args and env, and
-// returns 7 for the command "exit". Every mutating call lands in Calls.
+// returns 7 for the command "exit". Every mutating call lands in Calls. The
+// methods are safe for concurrent use, as the proxy and daemon tests call them
+// from several request goroutines; read the fields after the requests finish.
 type Fake struct {
+	mu      sync.Mutex
 	Envs    map[string]backend.Env
 	Cps     map[string][]backend.Checkpoint
 	Calls   []string
@@ -46,6 +50,8 @@ func New() *Fake {
 
 // Update merges non-empty settings into the environment, as the LXC backend does.
 func (f *Fake) Update(_ context.Context, name string, s backend.Settings) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	e, ok := f.Envs[name]
 	if !ok {
 		return backend.ErrNotFound
@@ -66,6 +72,8 @@ func (f *Fake) Update(_ context.Context, name string, s backend.Settings) error 
 }
 
 func (f *Fake) Create(_ context.Context, name string, o backend.CreateOptions) (backend.Env, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.Created = o
 	if err := backend.ValidateName(name); err != nil {
 		return backend.Env{}, err
@@ -81,6 +89,8 @@ func (f *Fake) Create(_ context.Context, name string, o backend.CreateOptions) (
 }
 
 func (f *Fake) List(context.Context) ([]backend.Env, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	out := []backend.Env{}
 	for _, n := range []string{"dev1", "dev2", "dev3"} {
 		if e, ok := f.Envs[n]; ok {
@@ -91,6 +101,8 @@ func (f *Fake) List(context.Context) ([]backend.Env, error) {
 }
 
 func (f *Fake) Get(_ context.Context, name string) (backend.Env, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.Gets[name]++
 	e, ok := f.Envs[name]
 	if !ok {
@@ -102,6 +114,8 @@ func (f *Fake) Get(_ context.Context, name string) (backend.Env, error) {
 // Start marks the environment running. An environment without an IP gets
 // 10.0.0.6, as DHCP would give one.
 func (f *Fake) Start(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	e, ok := f.Envs[name]
 	if !ok {
 		return backend.ErrNotFound
@@ -122,6 +136,8 @@ func (f *Fake) Start(_ context.Context, name string) error {
 // Stop marks the environment stopped. The IP is kept so a test can set one
 // before a wake.
 func (f *Fake) Stop(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	e, ok := f.Envs[name]
 	if !ok {
 		return backend.ErrNotFound
@@ -133,6 +149,8 @@ func (f *Fake) Stop(_ context.Context, name string) error {
 }
 
 func (f *Fake) Destroy(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if _, ok := f.Envs[name]; !ok {
 		return backend.ErrNotFound
 	}
@@ -142,11 +160,15 @@ func (f *Fake) Destroy(_ context.Context, name string) error {
 }
 
 func (f *Fake) Exec(ctx context.Context, name string, cmd []string, o backend.ExecOptions) (int, error) {
+	f.mu.Lock()
 	if _, ok := f.Envs[name]; !ok {
+		f.mu.Unlock()
 		return -1, backend.ErrNotFound
 	}
 	f.Calls = append(f.Calls, strings.Join(cmd, " "))
 	f.Root = append(f.Root, o.Root)
+	established := f.Established[name]
+	f.mu.Unlock() // the rest may block on ctx or stdin; never hold the lock there
 	if cmd[0] == "exit" {
 		return 7, nil
 	}
@@ -155,7 +177,7 @@ func (f *Fake) Exec(ctx context.Context, name string, cmd []string, o backend.Ex
 		return 130, nil
 	}
 	if cmd[0] == "ss" { // the idle loop's connection check
-		if f.Established[name] {
+		if established {
 			io.WriteString(o.Stdout, "ESTAB 0 0 10.0.0.5:22 10.0.0.9:51234\n")
 		}
 		return 0, nil
@@ -167,13 +189,17 @@ func (f *Fake) Exec(ctx context.Context, name string, cmd []string, o backend.Ex
 	// The daemon's fs/write runs `sh -c 'f="$1"; ...' sh <path> <mode>`. Keep the
 	// contents so a test can check what a push wrote, and answer with the size.
 	if cmd[0] == "sh" && len(cmd) >= 5 && strings.Contains(cmd[2], `cat > "$f"`) {
+		f.mu.Lock()
 		f.Pushed[cmd[4]] = string(in)
+		f.mu.Unlock()
 		fmt.Fprintf(o.Stdout, "%d\n", len(in))
 		return 0, nil
 	}
 	// fs/read is `cat -- <path>`. Serve pushed contents, else fail like cat.
 	if cmd[0] == "cat" && len(cmd) == 3 {
+		f.mu.Lock()
 		c, ok := f.Pushed[cmd[2]]
+		f.mu.Unlock()
 		if !ok {
 			fmt.Fprintf(o.Stderr, "cat: %s: No such file or directory\n", cmd[2])
 			return 1, nil
@@ -198,16 +224,22 @@ func (f *Fake) Exec(ctx context.Context, name string, cmd []string, o backend.Ex
 }
 
 func (f *Fake) Push(_ context.Context, name, local, remote string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, "push "+name+" "+local+" "+remote)
 	return nil
 }
 
 func (f *Fake) Pull(_ context.Context, name, remote, local string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, "pull "+name+" "+remote+" "+local)
 	return nil
 }
 
 func (f *Fake) Checkpoint(_ context.Context, name, comment string) (backend.Checkpoint, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if _, ok := f.Envs[name]; !ok {
 		return backend.Checkpoint{}, backend.ErrNotFound
 	}
@@ -219,6 +251,8 @@ func (f *Fake) Checkpoint(_ context.Context, name, comment string) (backend.Chec
 
 // ListCheckpoints returns oldest first, as the LXC backend does.
 func (f *Fake) ListCheckpoints(_ context.Context, name string) ([]backend.Checkpoint, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if _, ok := f.Envs[name]; !ok {
 		return nil, backend.ErrNotFound
 	}
@@ -226,6 +260,8 @@ func (f *Fake) ListCheckpoints(_ context.Context, name string) ([]backend.Checkp
 }
 
 func (f *Fake) DeleteCheckpoint(_ context.Context, name, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	cps := f.Cps[name]
 	for i, cp := range cps {
 		if cp.ID == id {
@@ -238,6 +274,8 @@ func (f *Fake) DeleteCheckpoint(_ context.Context, name, id string) error {
 }
 
 func (f *Fake) Restore(_ context.Context, name, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if _, ok := f.Envs[name]; !ok {
 		return backend.ErrNotFound
 	}

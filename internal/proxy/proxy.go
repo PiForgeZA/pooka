@@ -295,10 +295,16 @@ func (p *Proxy) start(ctx context.Context, name string) error {
 			return ctx.Err()
 		}
 	}
-	p.Log.Printf("proxy: waking %s", name)
-	// The start outlives the request that triggered it: a client that gives up
-	// must not leave a half-started environment.
-	wk.err = p.Backend.Start(context.WithoutCancel(ctx), name)
+	// A request that read a cached "stopped" just before an earlier wake finished
+	// would start again. Check the live status first.
+	if env, err := p.lookup(ctx, name, true); err == nil && env.Status == "running" {
+		wk.err = nil
+	} else {
+		p.Log.Printf("proxy: waking %s", name)
+		// The start outlives the request that triggered it: a client that gives
+		// up must not leave a half-started environment.
+		wk.err = p.Backend.Start(context.WithoutCancel(ctx), name)
+	}
 	p.mu.Lock()
 	delete(p.waking, name)
 	delete(p.cache, name)
