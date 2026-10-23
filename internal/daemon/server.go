@@ -25,15 +25,32 @@ type Server struct {
 	Version string
 	Create  backend.CreateOptions // defaults for new environments
 	Log     *log.Logger
+	// Domain is the DNS suffix of environment URLs (ADR 0008). Empty means no
+	// proxy: the url field falls back to http://<ip>:8080.
+	Domain string
+	// IdleTimeout is the default idle stop timeout (ADR 0009). 0 disables it.
+	IdleTimeout time.Duration
+	// Now returns the current time. Tests set it; nil means time.Now.
+	Now func() time.Time
 
 	mu       sync.Mutex
 	nextID   int
 	sessions map[string]*session
+	activity map[string]time.Time // last activity per environment
+	started  time.Time
 }
 
 // New returns a server with sane defaults.
 func New(b backend.Backend, token string) *Server {
-	return &Server{Backend: b, Token: token, Org: "local", Version: "dev", Log: log.Default(), sessions: map[string]*session{}}
+	return &Server{Backend: b, Token: token, Org: "local", Version: "dev", Log: log.Default(), sessions: map[string]*session{}, activity: map[string]time.Time{}, started: time.Now()}
+}
+
+// URLFor returns the environment's URL under the configured domain, or "".
+func (s *Server) URLFor(name string) string {
+	if s.Domain == "" {
+		return ""
+	}
+	return "https://" + name + "-" + s.Org + "." + s.Domain
 }
 
 // Handler returns the HTTP handler, with authentication applied.

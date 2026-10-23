@@ -20,6 +20,12 @@ Phase 1 serves one user on one host. Later phases serve more users and more host
   linked clone of a template.
 - **checkpoint**: a Proxmox snapshot of an environment's filesystem.
 - **backend**: the code that talks to one hypervisor type. Phase 1 has one backend: LXC.
+- **domain**: the DNS suffix under which environment URLs live. Set in `pookad.yaml`.
+- **URL**: `https://<name>-<org>.<domain>`. The proxy routes it to port 8080 in the
+  environment.
+- **proxy**: the part of `pookad` that serves URLs, wakes environments and ends TLS.
+- **idle**: an environment with no activity for its idle timeout and no established
+  TCP connection inside. Section 18 defines activity.
 
 ## 3. Goals
 
@@ -32,8 +38,8 @@ Phase 1 serves one user on one host. Later phases serve more users and more host
 ## 4. Non-goals for phase 1
 
 - Hardware isolation. LXC shares the host kernel.
-- HTTPS URLs for environments.
-- Automatic sleep on idle.
+- HTTPS URLs for environments. Phase 3 adds them, section 18.
+- Automatic sleep on idle. Phase 3 adds it, section 18.
 - Multiple hosts or multiple users.
 - The Sprites HTTP API.
 
@@ -84,8 +90,9 @@ disk_gb: 32
 cores: 4
 memory_mb: 8192
 ssh_pubkey: ~/.ssh/id_ed25519.pub
-daemon_url: http://proxmox:7700   # optional; selects the daemon transport
+daemon_url: https://api.192-168-68-200.sslip.io   # optional; selects the daemon transport
 token_file: ~/.config/pooka/token # or token: <value>
+ca_file: ~/.config/pooka/ca.pem   # the daemon's CA for an https daemon_url; this is the default
 ```
 
 Transport selection (ADR 0005): if `daemon_url` is set, commands go to `pookad` over
@@ -152,6 +159,8 @@ Each command maps to `pct` calls on the host over SSH. The table gives the mappi
 | `pooka destroy <name>` | `pct stop`, then `pct destroy <vmid> --purge`. |
 | `pooka use <name>` | Write `.pooka` in the current directory. |
 | `pooka setup` | Section 8. Copies the embedded `scripts/` to `/root/pooka-scripts`, runs `build-template.sh` and `install-daemon.sh` there as needed. |
+| `pooka url <name> [--auth sprite\|public] [--open]` | Section 18.4. `--auth` writes `url_auth` into the description with `pct set`. Daemon transport only; SSH has no URL. |
+| `pooka idle <name> [<duration>\|off]` | Section 18.5. Writes `idle_timeout` into the description with `pct set`. Without a value, shows it. |
 
 Rules:
 
@@ -263,6 +272,8 @@ and docs/sprites-api/README.md for the endpoint map and the compatibility probe.
 - Known limitation: attaching to an existing exec session returns 404. The official
   CLI's `exec --no-stdin` mode needs it. Use `--stdin` or `--http-post`.
 - Status mapping: running is `running`; stopped is `cold`. No `warm`.
+- `url` is the phase 3 URL, section 18, when the proxy is enabled. Without the proxy
+  it is `http://<ip>:8080` while running and empty otherwise.
 - The daemon runs commands locally; the LXC backend is unchanged. `POOKA_DEBUG=1` on
   the daemon logs every host call with its duration.
 - The backend reads containers from `pct list` and the config files, never from the
@@ -274,8 +285,95 @@ These are not part of phases 1 and 2. They set the direction.
 
 - Phase 2b, done: the `pooka` CLI talks to `pookad` when `daemon_url` is set. See
   sections 8 and 12.
-- Phase 3: a reverse proxy with a wildcard domain and TLS. A request to an
-  environment's URL starts it. Idle environments stop after a timeout.
+- Phase 3, section 18: a reverse proxy with a wildcard domain and TLS. A request to
+  an environment's URL starts it. Idle environments stop after a timeout.
+- Phase 3b, candidate: a tunnel such as Cloudflare Tunnel or frp in front of the proxy,
+  so `public` URLs reach the internet with a real certificate. The first-label routing
+  in ADR 0008 allows this without changes. Needs an ADR on whether `api.<domain>` is
+  exposed too.
 - Phase 4: an agent inside the environment for streaming exec, PTY, file watch and
   services.
 - Phase 5: a QEMU backend on Proxmox, then a Firecracker backend beside Proxmox.
+
+## 18. Phase 3: URLs, wake on request and idle stop
+
+ADR 0008 and ADR 0009 record the decisions.
+
+### 18.1 URLs
+
+- Every environment has the URL `https://<name>-<org>.<domain>`. `org` is `local`.
+- `domain` is a key in `/etc/pooka/pookad.yaml`. `pooka setup` defaults it to
+  `<host-ip>.sslip.io`, with dots in the address replaced by hyphens. Any public
+  resolver maps every name under that domain to the host. A user with a LAN DNS can
+  set a shorter domain and add one wildcard record.
+- The proxy routes on the first DNS label only. It splits the label at the last
+  hyphen into name and org. It ignores the rest of the host name.
+- The proxy forwards to port 8080 inside the environment. The port is fixed.
+- The API reports the URL in the `url` field of every sprite response.
+
+### 18.2 Proxy and TLS
+
+- The proxy runs inside `pookad`. It listens on `proxy_listen`, default
+  `0.0.0.0:443`. An empty value disables it. The 7700 listener does not change.
+- The host name `api.<domain>` on the proxy listener serves the Sprites API over
+  TLS. `pooka setup` sets `daemon_url` to `https://api.<domain>`.
+- On first start pookad writes a CA and a wildcard certificate under
+  `/etc/pooka/tls/`. `tls_cert` and `tls_key` in `pookad.yaml` replace them.
+- `pooka setup` copies the CA certificate to `~/.config/pooka/ca.pem` and prints
+  the command that trusts it. The CLI uses `ca.pem` when the file exists.
+
+### 18.3 Wake on request
+
+1. The proxy looks the name up with `Backend.Get`. It caches the answer for 2 s.
+2. If the environment is stopped, the proxy calls `Backend.Start`. One start runs
+   per name. Other requests for the same name wait for it.
+3. The proxy connects to port 8080 every 250 ms. On the first success it forwards
+   the request.
+4. After 30 s the proxy answers `502 Bad Gateway` with a plain text reason. A
+   running environment with nothing on port 8080 gets the same answer at once.
+
+### 18.4 URL auth
+
+- `url_settings.auth` is `sprite` or `public`. Default `sprite`. The value lives in
+  the container description JSON as `url_auth`. `PUT /v1/sprites/{name}` sets it.
+- With `sprite`, a request must carry `Authorization: Bearer <token>` or the
+  cookie `pooka_auth`. The cookie value is the hex HMAC-SHA256 of the host name
+  with the token as key. A request with `?token=<token>` sets the cookie and
+  redirects to the URL without the parameter. The proxy answers `401` otherwise.
+- With `public`, the proxy skips the check.
+- `pooka url <name>` prints the URL with the token appended. `--open` opens it in
+  the browser. `--auth sprite|public` changes the setting.
+
+### 18.5 Idle stop
+
+- Activity for an environment is: a proxy request, an open exec session, a
+  filesystem read or write, a checkpoint create or restore, a start, or a daemon
+  start. The daemon keeps the time of the last activity in memory. Reads of
+  information are not activity: `pooka ls`, `GET /v1/sprites/{name}` and checkpoint
+  lists do not keep an environment awake.
+- Every minute the daemon checks each running environment. If its last activity is
+  older than its idle timeout, the daemon runs `ss -Htn state established` inside
+  it. If the output is empty, the daemon stops the environment the way `pooka stop`
+  does. If not, the daemon records activity and checks again next minute.
+- `idle_timeout` in `pookad.yaml` is the default for every environment. Default
+  `30m`. `0` disables idle stop.
+- An environment can carry its own `idle_timeout` in the description JSON. `0`
+  opts out. `pooka create --idle-timeout <d>` sets it. `pooka idle <name> <d|off>`
+  and `PUT /pooka/v1/sprites/{name}/settings` change it.
+- Idle stop does not make a checkpoint.
+
+### 18.6 Backend changes
+
+`Env` gains `URLAuth` and `IdleTimeout`. `Backend` gains
+`Update(ctx, name, Settings) error`, which writes those fields into the container
+description. Both the LXC backend and the HTTP backend implement it.
+
+### 18.7 Configuration keys added to pookad.yaml
+
+```yaml
+domain: 192-168-68-200.sslip.io
+proxy_listen: 0.0.0.0:443     # empty disables the proxy
+tls_cert: ""                  # optional, with tls_key; default is the generated pair
+tls_key: ""
+idle_timeout: 30m             # 0 disables
+```

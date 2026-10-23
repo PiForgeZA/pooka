@@ -15,14 +15,16 @@ import (
 // fakeBackend records the last call. Enough to test argument plumbing.
 type fakeBackend struct {
 	backend.Backend
-	calls []string
-	envs  []backend.Env
-	code  int
+	calls      []string
+	envs       []backend.Env
+	code       int
+	lastCreate backend.CreateOptions
 }
 
 func (f *fakeBackend) rec(s string) { f.calls = append(f.calls, s) }
 
 func (f *fakeBackend) Create(_ context.Context, name string, o backend.CreateOptions) (backend.Env, error) {
+	f.lastCreate = o
 	f.rec(fmt.Sprintf("create %s cores=%d mem=%d disk=%d", name, o.Cores, o.MemoryMB, o.DiskGB))
 	return backend.Env{Name: name, VMID: 9100, IP: "10.0.0.5"}, nil
 }

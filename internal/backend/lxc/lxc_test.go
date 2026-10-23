@@ -304,3 +304,86 @@ func TestExecTTYKeepsSession(t *testing.T) {
 		t.Errorf("non-tty exec must keep the session: %s", last)
 	}
 }
+
+// Phase 3: settings live in the description JSON (ADR 0008, 0009).
+
+const confOutSettings = `/etc/pve/lxc/9100.conf:#{"created"%3A"2026-10-20T12%3A00%3A00Z","pooka"%3A"dev","url_auth"%3A"public","idle_timeout"%3A"0s"}
+/etc/pve/lxc/9100.conf:tags: pooka
+/etc/pve/lxc/9101.conf:#{"created"%3A"2026-10-20T12%3A00%3A00Z","pooka"%3A"dev","idle_timeout"%3A"1h0m0s"}
+/etc/pve/lxc/9101.conf:tags: pooka
+proxmox
+`
+
+func TestListReadsSettingsFromDescription(t *testing.T) {
+	f := &host.Fake{}
+	f.On("pct list", pctList)
+	f.On("sh -c "+confScript, confOutSettings)
+	envs, err := newBackend(f).List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(envs) != 2 {
+		t.Fatalf("want 2 envs, got %+v", envs)
+	}
+	if envs[0].URLAuth != "public" || envs[0].IdleTimeout == nil || *envs[0].IdleTimeout != 0 {
+		t.Errorf("dev1 settings: %+v", envs[0].Settings)
+	}
+	if envs[1].URLAuth != "" || envs[1].IdleTimeout == nil || *envs[1].IdleTimeout != time.Hour {
+		t.Errorf("dev2 settings: %+v", envs[1].Settings)
+	}
+}
+
+func TestUpdateMergesIntoDescription(t *testing.T) {
+	f := newFake()
+	b := newBackend(f)
+	if err := b.Update(context.Background(), "dev1", backend.Settings{URLAuth: "public"}); err != nil {
+		t.Fatal(err)
+	}
+	// The description comes from the inventory's conf scan; no `pct config` call.
+	want := `pct set 9100 --description {"created":"2026-10-20T12:00:00Z","pooka":"dev","url_auth":"public"}`
+	if !f.Called(want) {
+		t.Errorf("want %q in calls:\n%s", want, strings.Join(f.Calls, "\n"))
+	}
+	if f.Called("pct config 9100") {
+		t.Error("Update must not re-read the config")
+	}
+	d := 90 * time.Minute
+	if err := b.Update(context.Background(), "dev1", backend.Settings{IdleTimeout: &d}); err != nil {
+		t.Fatal(err)
+	}
+	want = `pct set 9100 --description {"created":"2026-10-20T12:00:00Z","idle_timeout":"1h30m0s","pooka":"dev"}`
+	if !f.Called(want) {
+		t.Errorf("want %q in calls:\n%s", want, strings.Join(f.Calls, "\n"))
+	}
+	// dev2 has a tag line but no pooka description: Update starts a fresh object.
+	if err := b.Update(context.Background(), "dev2", backend.Settings{URLAuth: "public"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := `pct set 9101 --description {"url_auth":"public"}`; !f.Called(want) {
+		t.Errorf("want %q in calls:\n%s", want, strings.Join(f.Calls, "\n"))
+	}
+	if err := b.Update(context.Background(), "dev1", backend.Settings{URLAuth: "nope"}); err == nil {
+		t.Error("want an error for an invalid auth value")
+	}
+	if err := b.Update(context.Background(), "ghost", backend.Settings{URLAuth: "public"}); !errors.Is(err, backend.ErrNotFound) {
+		t.Errorf("want ErrNotFound, got %v", err)
+	}
+}
+
+func TestCreateWritesIdleTimeout(t *testing.T) {
+	f := newFake()
+	f.On("lxc-info -n 9102 -iH", "192.168.68.52\n")
+	d := time.Duration(0)
+	if _, err := newBackend(f).Create(context.Background(), "dev3", backend.CreateOptions{IdleTimeout: &d}); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range f.Calls {
+		if strings.HasPrefix(c, "pct set 9102 ") && strings.Contains(c, `"idle_timeout":"0s"`) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("idle_timeout not in the description:\n%s", strings.Join(f.Calls, "\n"))
+	}
+}

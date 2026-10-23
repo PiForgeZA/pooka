@@ -4,10 +4,15 @@ package cli
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -45,6 +50,8 @@ type App struct {
 	Err      io.Writer
 	// ActiveEnv returns the name from ./.pooka. Tests override it.
 	ActiveEnv func() string
+	// OpenURL opens a URL in the browser. nil means the platform opener.
+	OpenURL func(u string) error
 }
 
 // NewApp wires the real config and the backend opener.
@@ -88,10 +95,30 @@ func openBackend(cfg config.Config, transport string) (backend.Backend, error) {
 		if os.Getenv("POOKA_DEBUG") != "" {
 			c.Debug = os.Stderr
 		}
+		ca, err := cfg.ReadCA()
+		if err != nil {
+			return nil, err
+		}
+		if len(ca) > 0 {
+			c.HTTP.Transport = transportWithCA(ca)
+		}
 		return c, nil
 	default:
 		return nil, fmt.Errorf("unknown transport %q: use ssh or daemon", transport)
 	}
+}
+
+// transportWithCA returns an HTTP transport that trusts the given CA PEM besides
+// the system roots, for the daemon's generated certificate (ADR 0008).
+func transportWithCA(caPEM []byte) *http.Transport {
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	pool.AppendCertsFromPEM(caPEM)
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	return t
 }
 
 // transport picks the transport from --transport, else from the config: daemon when
@@ -142,6 +169,7 @@ func (a *App) Root() *cobra.Command {
 		a.pushCmd(), a.pullCmd(),
 		a.checkpointCmd(), a.restoreCmd(),
 		a.startCmd(), a.stopCmd(), a.destroyCmd(), a.useCmd(),
+		a.urlCmd(), a.idleCmd(),
 		a.setupCmd(),
 	)
 	return root
@@ -226,8 +254,16 @@ func (a *App) createCmd() *cobra.Command {
 					disk = 0
 				}
 			}
+			opts := backend.CreateOptions{Cores: cores, MemoryMB: mem, DiskGB: disk, SSHPubKey: key}
+			if v, _ := cmd.Flags().GetString("idle-timeout"); v != "" {
+				d, err := parseIdleTimeout(v)
+				if err != nil {
+					return err
+				}
+				opts.IdleTimeout = &d
+			}
 			start := time.Now()
-			env, err := a.Backend.Create(cmd.Context(), args[0], backend.CreateOptions{Cores: cores, MemoryMB: mem, DiskGB: disk, SSHPubKey: key})
+			env, err := a.Backend.Create(cmd.Context(), args[0], opts)
 			if err != nil {
 				return err
 			}
@@ -236,13 +272,162 @@ func (a *App) createCmd() *cobra.Command {
 			if env.IP != "" && key != "" {
 				fmt.Fprintf(a.Out, "  ssh pooka@%s\n", env.IP)
 			}
+			if env.URL != "" {
+				fmt.Fprintf(a.Out, "  %s  (port 8080; pooka url %s)\n", env.URL, env.Name)
+			}
 			return nil
 		},
 	}
 	c.Flags().Int("cores", a.Cfg.Cores, "CPU cores (over the daemon: its default unless set)")
 	c.Flags().Int("memory", a.Cfg.MemoryMB, "memory in MiB (over the daemon: its default unless set)")
 	c.Flags().Int("disk", a.Cfg.DiskGB, "root disk size in GiB, thin (over the daemon: its default unless set)")
+	c.Flags().String("idle-timeout", "", "stop after this long without activity, for example 2h; off disables (default: the daemon's idle_timeout)")
 	return c
+}
+
+// parseIdleTimeout reads an idle timeout: a duration such as 30m, or off.
+func parseIdleTimeout(v string) (time.Duration, error) {
+	switch strings.ToLower(v) {
+	case "off", "never", "0":
+		return 0, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		return 0, fmt.Errorf("invalid idle timeout %q: use a duration such as 30m or 2h, or off", v)
+	}
+	return d, nil
+}
+
+func (a *App) urlCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "url [name]",
+		Short: "Print the environment's URL (port 8080 inside); --open opens it in the browser",
+		Long: `Prints https://<name>-local.<domain>. A request to the URL wakes a stopped
+environment. With auth "sprite" (the default) the URL carries the daemon token as a
+query parameter; the proxy turns it into a cookie for that host. With auth "public"
+anyone who can reach the host can open it.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name, _, err := a.envName(cmd, args)
+			if err != nil {
+				return err
+			}
+			if auth, _ := cmd.Flags().GetString("auth"); auth != "" {
+				if err := backend.ValidateURLAuth(auth); err != nil {
+					return err
+				}
+				if err := a.Backend.Update(cmd.Context(), name, backend.Settings{URLAuth: auth}); err != nil {
+					return err
+				}
+			}
+			env, err := a.Backend.Get(cmd.Context(), name)
+			if err != nil {
+				return err
+			}
+			if env.URL == "" {
+				return errors.New("no URL: environment URLs need the daemon transport and a domain in /etc/pooka/pookad.yaml (SPEC section 18)")
+			}
+			u := env.URL
+			if env.URLAuth != "public" {
+				tok, err := a.Cfg.DaemonToken()
+				if err != nil {
+					return err
+				}
+				u += "/?token=" + tok
+			}
+			fmt.Fprintln(a.Out, u)
+			if open, _ := cmd.Flags().GetBool("open"); open {
+				return a.openBrowser(u)
+			}
+			return nil
+		},
+	}
+	addNameFlag(c)
+	c.Flags().String("auth", "", "set who may open the URL: sprite (token holders) or public")
+	c.Flags().Bool("open", false, "open the URL in the default browser")
+	return c
+}
+
+// openBrowser opens a URL with the platform's opener. Tests replace OpenURL.
+func (a *App) openBrowser(u string) error {
+	if a.OpenURL != nil {
+		return a.OpenURL(u)
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", u)
+	default:
+		cmd = exec.Command("xdg-open", u)
+	}
+	return cmd.Start()
+}
+
+func (a *App) idleCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "idle [name] [duration|off]",
+		Short: "Show or set how long the environment may sit idle before it stops",
+		Long: `Without a value, shows the environment's idle timeout. With a value, sets it:
+a duration such as 30m or 2h, or off to never stop on idle. An environment without
+its own value takes the daemon's idle_timeout from /etc/pooka/pookad.yaml.`,
+		Args: cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name, rest, err := a.idleArgs(cmd, args)
+			if err != nil {
+				return err
+			}
+			if len(rest) == 1 {
+				d, err := parseIdleTimeout(rest[0])
+				if err != nil {
+					return err
+				}
+				if err := a.Backend.Update(cmd.Context(), name, backend.Settings{IdleTimeout: &d}); err != nil {
+					return err
+				}
+			}
+			env, err := a.Backend.Get(cmd.Context(), name)
+			if err != nil {
+				return err
+			}
+			switch {
+			case env.IdleTimeout == nil:
+				fmt.Fprintf(a.Out, "%s: idle timeout is the daemon default\n", name)
+			case *env.IdleTimeout == 0:
+				fmt.Fprintf(a.Out, "%s: idle stop is off\n", name)
+			default:
+				fmt.Fprintf(a.Out, "%s: stops after %s without activity\n", name, *env.IdleTimeout)
+			}
+			return nil
+		},
+	}
+	addNameFlag(c)
+	return c
+}
+
+// idleArgs resolves `idle`, `idle <name>`, `idle <value>` and `idle <name> <value>`.
+// A value is anything that parses as a duration or is "off".
+func (a *App) idleArgs(cmd *cobra.Command, args []string) (string, []string, error) {
+	isValue := func(s string) bool { _, err := parseIdleTimeout(s); return err == nil }
+	if n, _ := cmd.Flags().GetString("name"); n != "" {
+		if len(args) > 1 {
+			return "", nil, errors.New("give one value: a duration such as 30m, or off")
+		}
+		return n, args, nil
+	}
+	switch len(args) {
+	case 2:
+		return args[0], args[1:], nil
+	case 1:
+		if isValue(args[0]) {
+			if n := a.ActiveEnv(); n != "" {
+				return n, args, nil
+			}
+			return "", nil, errors.New("no environment given: pass a name, -n <name>, or run `pooka use <name>`")
+		}
+		return args[0], nil, nil
+	}
+	name, _, err := a.envName(cmd, nil)
+	return name, nil, err
 }
 
 func (a *App) lsCmd() *cobra.Command {

@@ -172,11 +172,19 @@ func (c *Client) statusError(resp *http.Response) error {
 // --- Sprites shapes ---
 
 type sprite struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Status    string `json:"status"`
-	URL       string `json:"url"`
-	CreatedAt string `json:"created_at"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Status      string `json:"status"`
+	URL         string `json:"url"`
+	CreatedAt   string `json:"created_at"`
+	URLSettings *struct {
+		Auth string `json:"auth"`
+	} `json:"url_settings"`
+	// Pooka is the daemon's extension object (ADR 0005, 0008).
+	Pooka *struct {
+		IP          string  `json:"ip"`
+		IdleTimeout *string `json:"idle_timeout"`
+	} `json:"pooka"`
 }
 
 func toEnv(sp sprite) backend.Env {
@@ -187,8 +195,23 @@ func toEnv(sp sprite) backend.Env {
 	if n, err := strconv.Atoi(strings.TrimPrefix(sp.ID, "sprite-")); err == nil {
 		e.VMID = n
 	}
+	if sp.Pooka != nil {
+		e.IP = sp.Pooka.IP
+		if sp.Pooka.IdleTimeout != nil {
+			if d, err := time.ParseDuration(*sp.Pooka.IdleTimeout); err == nil {
+				e.IdleTimeout = &d
+			}
+		}
+	}
 	if u, err := url.Parse(sp.URL); err == nil && u.Host != "" {
-		e.IP = u.Hostname()
+		if u.Scheme == "https" {
+			e.URL = sp.URL
+		} else if e.IP == "" {
+			e.IP = u.Hostname() // a phase 2 daemon: url is http://<ip>:8080
+		}
+	}
+	if sp.URLSettings != nil {
+		e.URLAuth = sp.URLSettings.Auth
 	}
 	if t, err := time.Parse(time.RFC3339, sp.CreatedAt); err == nil {
 		e.Created = t
@@ -225,11 +248,26 @@ func (c *Client) Create(ctx context.Context, name string, o backend.CreateOption
 		return backend.Env{}, err
 	}
 	req := map[string]any{"name": name, "cores": o.Cores, "memory_mb": o.MemoryMB, "disk_gb": o.DiskGB, "ssh_pubkey": o.SSHPubKey}
+	if o.IdleTimeout != nil {
+		req["idle_timeout"] = o.IdleTimeout.String()
+	}
 	var sp sprite
 	if err := c.doJSON(ctx, http.MethodPost, "/pooka/v1/sprites", nil, req, &sp); err != nil {
 		return backend.Env{}, err
 	}
 	return toEnv(sp), nil
+}
+
+// Update writes url_auth and idle_timeout through the pooka settings extension.
+func (c *Client) Update(ctx context.Context, name string, s backend.Settings) error {
+	if err := backend.ValidateURLAuth(s.URLAuth); err != nil {
+		return err
+	}
+	req := map[string]any{"url_auth": s.URLAuth}
+	if s.IdleTimeout != nil {
+		req["idle_timeout"] = s.IdleTimeout.String()
+	}
+	return c.doJSON(ctx, http.MethodPut, pookaPath(name, "settings"), nil, req, nil)
 }
 
 func (c *Client) List(ctx context.Context) ([]backend.Env, error) {

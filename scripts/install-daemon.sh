@@ -22,8 +22,13 @@ if [ ! -s /etc/pooka/token ]; then
 fi
 chmod 0600 /etc/pooka/token
 
+HOST_IP="$(hostname -I | awk '{print $1}')"
+# POOKA_DOMAIN (set by `pooka setup`) names the domain for environment URLs.
+# Default: the sslip.io name of this host, which any public resolver maps here.
+DEFAULT_DOMAIN="${POOKA_DOMAIN:-$(echo "$HOST_IP" | tr . -).sslip.io}"
+
 if [ ! -f /etc/pooka/pookad.yaml ]; then
-  cat > /etc/pooka/pookad.yaml <<'EOF'
+  cat > /etc/pooka/pookad.yaml <<EOF
 # pookad configuration. Every key is optional; these are the defaults.
 listen: 0.0.0.0:7700
 token_file: /etc/pooka/token
@@ -34,8 +39,21 @@ disk_gb: 32
 cores: 4
 memory_mb: 8192
 # ssh_pubkey: /root/.ssh/pooka-users.pub   # injected into every new environment
+
+# Environment URLs (SPEC section 18). https://<name>-local.<domain> on proxy_listen.
+# Any public resolver maps *.${DEFAULT_DOMAIN} to this host. A LAN DNS can serve a
+# shorter domain with one wildcard record. Empty domain disables the proxy.
+domain: ${DEFAULT_DOMAIN}
+proxy_listen: 0.0.0.0:443
+# tls_cert: /etc/pooka/tls/cert.pem   # bring your own pair; default is a generated CA
+# tls_key: /etc/pooka/tls/key.pem
+idle_timeout: 30m                     # stop idle environments; 0 disables
 EOF
   echo "wrote /etc/pooka/pookad.yaml"
+elif ! grep -q '^domain:' /etc/pooka/pookad.yaml; then
+  # A phase 2 file. Add the URL keys; every other key stays as it is (ADR 0007).
+  printf '\n# Added by install-daemon.sh: environment URLs (SPEC section 18).\ndomain: %s\nproxy_listen: 0.0.0.0:443\nidle_timeout: 30m\n' "$DEFAULT_DOMAIN" >> /etc/pooka/pookad.yaml
+  echo "added domain ${DEFAULT_DOMAIN} to /etc/pooka/pookad.yaml"
 fi
 
 cat > /etc/systemd/system/pookad.service <<'EOF'
@@ -62,5 +80,9 @@ systemctl restart pookad.service
 sleep 1
 systemctl --no-pager --lines=3 status pookad.service || true
 echo
+DOMAIN="$(sed -n 's/^domain: *//p' /etc/pooka/pookad.yaml | head -n1)"
 echo "pookad installed. Token: /etc/pooka/token"
-echo "Clients: export SPRITES_API_URL=http://$(hostname -I | awk '{print $1}'):7700 SPRITE_TOKEN=\$(cat /etc/pooka/token) SPRITE_ORG=local"
+echo "Clients: export SPRITES_API_URL=http://${HOST_IP}:7700 SPRITE_TOKEN=\$(cat /etc/pooka/token) SPRITE_ORG=local"
+if [ -n "$DOMAIN" ]; then
+  echo "URLs: https://<name>-local.${DOMAIN} (API over TLS at https://api.${DOMAIN}; CA at /etc/pooka/tls/ca.pem)"
+fi

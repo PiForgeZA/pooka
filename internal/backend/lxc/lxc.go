@@ -75,6 +75,8 @@ type resource struct {
 	Tags    string
 	Node    string
 	Created time.Time
+	Desc    string // the raw percent-encoded description line, for Update
+	backend.Settings
 }
 
 func hasTag(tags, want string) bool {
@@ -103,11 +105,13 @@ func (b *Backend) inventory(ctx context.Context) ([]resource, error) {
 	if err != nil {
 		return nil, err
 	}
-	tags, created, node := parseConfs(conf)
+	tags, metas, node := parseConfs(conf)
 	var out []resource
 	for _, r := range parsePctList(list) {
 		r.Tags = tags[r.VMID]
-		r.Created = created[r.VMID]
+		r.Created = metas[r.VMID].Created
+		r.Settings = metas[r.VMID].Settings
+		r.Desc = metas[r.VMID].Desc
 		r.Node = node
 		if hasTag(r.Tags, Tag) {
 			out = append(out, r)
@@ -136,8 +140,8 @@ func parsePctList(out string) []resource {
 
 // parseConfs reads confScript output: "<file>:tags: a;b", "<file>:#<encoded>", and
 // the node name on the last line.
-func parseConfs(out string) (tags map[int]string, created map[int]time.Time, node string) {
-	tags, created = map[int]string{}, map[int]time.Time{}
+func parseConfs(out string) (tags map[int]string, metas map[int]meta, node string) {
+	tags, metas = map[int]string{}, map[int]meta{}
 	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
 		file, rest, ok := strings.Cut(l, ".conf:")
 		if !ok {
@@ -152,12 +156,12 @@ func parseConfs(out string) (tags map[int]string, created map[int]time.Time, nod
 		case strings.HasPrefix(rest, "tags:"):
 			tags[vmid] = strings.TrimSpace(strings.TrimPrefix(rest, "tags:"))
 		case strings.HasPrefix(rest, "#"):
-			if t := createdFromDescription(rest[1:]); !t.IsZero() {
-				created[vmid] = t
+			if m, ok := metaFromDescription(rest[1:]); ok {
+				metas[vmid] = m
 			}
 		}
 	}
-	return tags, created, node
+	return tags, metas, node
 }
 
 // usedVMIDs returns every VMID that has a container or VM config on this node.
@@ -208,7 +212,7 @@ func (b *Backend) ip(ctx context.Context, vmid int) string {
 }
 
 func (b *Backend) toEnv(ctx context.Context, r resource) backend.Env {
-	e := backend.Env{Name: r.Name, VMID: r.VMID, Node: r.Node, Status: r.Status, Created: r.Created}
+	e := backend.Env{Name: r.Name, VMID: r.VMID, Node: r.Node, Status: r.Status, Created: r.Created, Settings: r.Settings}
 	if r.Status == "running" {
 		e.IP = b.ip(ctx, r.VMID)
 	}
@@ -235,34 +239,87 @@ func (b *Backend) Get(ctx context.Context, name string) (backend.Env, error) {
 	return b.toEnv(ctx, r), nil
 }
 
-// parseCreated reads the creation time from `pct config` output, where the
-// description pooka wrote at create appears percent-encoded on one line.
-func parseCreated(config string) time.Time {
-	for _, l := range strings.Split(config, "\n") {
-		if d, ok := strings.CutPrefix(l, "description: "); ok {
-			if t := createdFromDescription(d); !t.IsZero() {
-				return t
-			}
-		}
-	}
-	return time.Time{}
+// meta is what pooka keeps in the container description: a JSON object with the
+// pooka version, the creation time, the template, and the phase 3 settings
+// (ADR 0008, 0009). Proxmox stores it percent-encoded on one line.
+type meta struct {
+	Created time.Time
+	Desc    string // the raw line as the config file holds it
+	backend.Settings
 }
 
-// createdFromDescription decodes one percent-encoded description and returns the
-// "created" field of pooka's JSON, or zero.
-func createdFromDescription(d string) time.Time {
+// Description JSON keys.
+const (
+	keyCreated     = "created"
+	keyURLAuth     = "url_auth"
+	keyIdleTimeout = "idle_timeout" // Go duration string, for example "30m0s"
+)
+
+// decodeDescription returns the JSON object in one percent-encoded description, or
+// false when it is not pooka's.
+func decodeDescription(d string) (map[string]any, bool) {
 	if u, err := url.PathUnescape(d); err == nil {
 		d = u
 	}
-	var meta struct {
-		Created string `json:"created"`
+	var m map[string]any
+	if json.Unmarshal([]byte(strings.TrimSpace(d)), &m) != nil || m == nil {
+		return nil, false
 	}
-	if json.Unmarshal([]byte(strings.TrimSpace(d)), &meta) == nil {
-		if t, err := time.Parse(time.RFC3339, meta.Created); err == nil {
-			return t
+	return m, true
+}
+
+// metaFromDescription decodes one percent-encoded description. ok is false when
+// it is not pooka's JSON.
+func metaFromDescription(d string) (m meta, ok bool) {
+	obj, ok := decodeDescription(d)
+	if !ok {
+		return meta{}, false
+	}
+	m.Desc = d
+	if s, _ := obj[keyCreated].(string); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			m.Created = t
 		}
 	}
-	return time.Time{}
+	if s, _ := obj[keyURLAuth].(string); backend.ValidateURLAuth(s) == nil {
+		m.URLAuth = s
+	}
+	if s, _ := obj[keyIdleTimeout].(string); s != "" {
+		if dur, err := time.ParseDuration(s); err == nil && dur >= 0 {
+			m.IdleTimeout = &dur
+		}
+	}
+	return m, true
+}
+
+// Update merges the settings into the description JSON and writes it back with
+// `pct set`. Other keys in the JSON are kept. The inventory already read the
+// description, so this costs one host call beyond the lookup.
+func (b *Backend) Update(ctx context.Context, name string, s backend.Settings) error {
+	if err := backend.ValidateURLAuth(s.URLAuth); err != nil {
+		return err
+	}
+	r, err := b.find(ctx, name)
+	if err != nil {
+		return err
+	}
+	id := strconv.Itoa(r.VMID)
+	obj, ok := decodeDescription(r.Desc)
+	if !ok {
+		obj = map[string]any{}
+	}
+	if s.URLAuth != "" {
+		obj[keyURLAuth] = s.URLAuth
+	}
+	if s.IdleTimeout != nil {
+		obj[keyIdleTimeout] = s.IdleTimeout.String()
+	}
+	desc, err := json.Marshal(obj)
+	if err != nil {
+		return err
+	}
+	_, err = b.run(ctx, "pct", "set", id, "--description", string(desc))
+	return err
 }
 
 // freeVMID returns the lowest VMID in the configured range with no config file.
@@ -301,9 +358,13 @@ func (b *Backend) Create(ctx context.Context, name string, o backend.CreateOptio
 	if _, err := b.run(ctx, "pct", "clone", tpl, id, "--hostname", name); err != nil {
 		return backend.Env{}, err
 	}
-	desc, _ := json.Marshal(map[string]any{
-		"pooka": b.opts.Version, "created": time.Now().UTC().Format(time.RFC3339), "template": b.opts.Template,
-	})
+	meta := map[string]any{
+		"pooka": b.opts.Version, keyCreated: time.Now().UTC().Format(time.RFC3339), "template": b.opts.Template,
+	}
+	if o.IdleTimeout != nil {
+		meta[keyIdleTimeout] = o.IdleTimeout.String()
+	}
+	desc, _ := json.Marshal(meta)
 	setArgs := []string{"pct", "set", id, "--tags", Tag, "--description", string(desc)}
 	if o.Cores > 0 {
 		setArgs = append(setArgs, "--cores", strconv.Itoa(o.Cores))

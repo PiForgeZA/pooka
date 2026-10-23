@@ -27,6 +27,33 @@ type Config struct {
 	DaemonURL string `yaml:"daemon_url,omitempty"`
 	Token     string `yaml:"token,omitempty"`
 	TokenFile string `yaml:"token_file,omitempty"`
+	// CAFile is the daemon's CA certificate for an https daemon_url (ADR 0008).
+	// Empty means ~/.config/pooka/ca.pem when that file exists.
+	CAFile string `yaml:"ca_file,omitempty"`
+}
+
+// CAPath is where `pooka setup` stores the daemon's CA certificate: next to
+// the config file.
+func CAPath() string {
+	return filepath.Join(filepath.Dir(Path()), "ca.pem")
+}
+
+// ReadCA returns the CA certificate PEM for the daemon, or nil when there is
+// none. A missing default file is not an error; a missing configured file is.
+func (c Config) ReadCA() ([]byte, error) {
+	p := ExpandHome(c.CAFile)
+	if p == "" {
+		b, err := os.ReadFile(CAPath())
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return b, err
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return nil, fmt.Errorf("config: ca_file: %w", err)
+	}
+	return b, nil
 }
 
 // Default returns the built-in defaults.

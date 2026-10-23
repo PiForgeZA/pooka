@@ -88,12 +88,16 @@ func (s *Server) addSession(name string, p execParams, cancel context.CancelFunc
 	s.nextID++
 	ss := &session{ID: strconv.Itoa(s.nextID), Env: name, Command: strings.Join(p.cmd, " "), Workdir: p.dir, TTY: p.tty, Created: time.Now(), cancel: cancel, active: true, lastSeen: time.Now()}
 	s.sessions[ss.ID] = ss
+	s.activity[name] = s.now()
 	return ss
 }
 
 func (s *Server) endSession(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if ss, ok := s.sessions[id]; ok {
+		s.activity[ss.Env] = s.now() // the idle clock starts when the session ends
+	}
 	delete(s.sessions, id)
 }
 

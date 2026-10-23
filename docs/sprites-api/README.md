@@ -64,7 +64,7 @@ Query parameters on the exec path: `cmd` (repeated), `path`, `stdin`, `tty`, `en
 | `POST /v1/sprites` | yes | `Backend.Create` |
 | `GET /v1/sprites/{name}` | yes | `Backend.Get` |
 | `DELETE /v1/sprites/{name}` | yes | `Backend.Destroy` |
-| `PUT /v1/sprites/{name}` | accepted, no-op | URL settings have no meaning yet |
+| `PUT /v1/sprites/{name}` | yes | `url_settings.auth` to `Backend.Update` (phase 3, ADR 0008) |
 | `POST .../checkpoint` | yes, ndjson | `Backend.Checkpoint` |
 | `GET .../checkpoints` | yes | `Backend.ListCheckpoints` |
 | `GET .../checkpoints/{id}` | yes | from the list |
@@ -96,9 +96,10 @@ They use the same bearer token. The official `sprite` CLI never calls them.
 
 | Endpoint | Body | Response |
 |---|---|---|
-| `POST /pooka/v1/sprites` | `{"name","cores","memory_mb","disk_gb","ssh_pubkey"}`; a zero or empty value means the daemon default | 201, SpriteResponse |
+| `POST /pooka/v1/sprites` | `{"name","cores","memory_mb","disk_gb","ssh_pubkey","idle_timeout"}`; a zero or empty value means the daemon default; `idle_timeout` is a Go duration such as `2h` or `0s` | 201, SpriteResponse |
 | `POST /pooka/v1/sprites/{name}/start` | none | 204 |
 | `POST /pooka/v1/sprites/{name}/stop` | none | 204 |
+| `PUT /pooka/v1/sprites/{name}/settings` | `{"url_auth","idle_timeout"}`; an empty field keeps its value (ADR 0008, 0009) | 200, SpriteResponse |
 | `DELETE /pooka/v1/sprites/{name}/checkpoints/{id}` | none | 204 |
 | `GET` and `POST /pooka/v1/sprites/{name}/exec` | same protocol and query as the Sprites exec, plus `root=true` to run as root | as the Sprites exec |
 
@@ -121,6 +122,20 @@ How the `pooka` CLI maps onto the API (internal/backend/httpapi):
 | `checkpoint rm` | pooka extension |
 | `restore` | `POST .../checkpoints/{id}/restore` stream |
 
+| `url --auth` | `PUT /v1/sprites/{name}` with `url_settings` |
+| `idle` | `PUT /pooka/v1/sprites/{name}/settings` |
+
 Status mapping: a running container reports `running`; a stopped one reports `cold`.
-pooka has no `warm` state in phase 2. The `url` field is `http://<ip>:8080` while running
-and empty otherwise, until phase 3 adds real URLs.
+pooka has no `warm` state. With a `domain` in pookad.yaml the `url` field is
+`https://<name>-local.<domain>` whether the environment runs or not, because a
+request wakes it (phase 3, ADR 0008). Without a domain it is `http://<ip>:8080`
+while running and empty otherwise. `url_settings.auth` reports the stored value.
+
+Every sprite response carries one extra object, `pooka`, with `ip` (empty when
+stopped) and `idle_timeout` (a Go duration, or null for the daemon default). It
+sits under one key so a future Sprites field cannot collide with it.
+
+The proxy on the daemon's `proxy_listen` serves the API for the host name
+`api.<domain>` over TLS, with the generated CA from `/etc/pooka/tls/ca.pem`. The
+official CLI reaches it with `SPRITES_API_URL=https://api.<domain>` once that CA is
+in the system trust store, or on plain HTTP at port 7700 as before.

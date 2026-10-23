@@ -19,7 +19,24 @@ type Env struct {
 	Node    string
 	Status  string // running, stopped
 	IP      string // empty when stopped or unknown
+	URL     string // https://<name>-<org>.<domain>; empty when no proxy serves it
 	Created time.Time
+	Settings
+}
+
+// Settings are the per-environment fields that live in the container description
+// (ADR 0008, 0009). In an Update, an empty or nil field keeps the current value.
+type Settings struct {
+	URLAuth     string         // "sprite" (token holders only) or "public"; "" means sprite
+	IdleTimeout *time.Duration // nil means the daemon default; 0 means never stop
+}
+
+// ValidateURLAuth checks an auth value. "" is allowed and means "keep".
+func ValidateURLAuth(v string) error {
+	if v == "" || v == "sprite" || v == "public" {
+		return nil
+	}
+	return fmt.Errorf("invalid url auth %q: use sprite or public", v)
 }
 
 // Checkpoint is one saved filesystem state.
@@ -35,6 +52,9 @@ type CreateOptions struct {
 	MemoryMB  int
 	DiskGB    int
 	SSHPubKey string // contents of the public key, may be empty
+	// IdleTimeout, when set, becomes the environment's own idle timeout. nil
+	// leaves the daemon default in force.
+	IdleTimeout *time.Duration
 }
 
 // ExecOptions control a command inside an environment.
@@ -64,6 +84,8 @@ type Backend interface {
 	ListCheckpoints(ctx context.Context, name string) ([]Checkpoint, error)
 	DeleteCheckpoint(ctx context.Context, name, id string) error
 	Restore(ctx context.Context, name, id string) error
+	// Update writes the given settings. Empty or nil fields keep their value.
+	Update(ctx context.Context, name string, s Settings) error
 }
 
 // ErrNotFound means no environment has the given name.
