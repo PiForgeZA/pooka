@@ -161,6 +161,9 @@ Each command maps to `pct` calls on the host over SSH. The table gives the mappi
 | `pooka setup` | Section 8. Copies the embedded `scripts/` to `/root/pooka-scripts`, runs `build-template.sh` and `install-daemon.sh` there as needed. |
 | `pooka url <name> [--auth sprite\|public] [--open]` | Section 18.4. `--auth` writes `url_auth` into the description with `pct set`. Daemon transport only; SSH has no URL. |
 | `pooka idle <name> [<duration>\|off]` | Section 18.5. Writes `idle_timeout` into the description with `pct set`. Without a value, shows it. |
+| `pooka ip <name>` | Print the IP address from `Get`. Fails with a hint when the environment is stopped. |
+| `pooka ssh-proxy <name>[.pooka]` | For `ssh ProxyCommand`. `Get`, then `Start` if stopped, then poll port 22 for up to 30 s, then forward stdin and stdout to it. |
+| `pooka ssh-config [--install]` | Print the `Host *.pooka` entry for `~/.ssh/config`: user `pooka`, the ProxyCommand above, `StrictHostKeyChecking accept-new`, a known_hosts file next to the config. `--install` appends it once. `pooka setup` offers the same. `destroy` removes the environment's known_hosts entry. |
 
 Rules:
 

@@ -122,6 +122,7 @@ func newSetupApp(t *testing.T, fh *host.Fake, stdin string) (*App, func() string
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
 	t.Setenv("POOKA_CONFIG", cfgPath)
+	t.Setenv("HOME", dir) // setup writes ~/.ssh/config; keep it off the real one
 	t.Setenv("SPRITES_API_URL", "")
 	t.Setenv("SPRITE_TOKEN", "")
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) }))
@@ -182,6 +183,23 @@ func TestSetupYesBuildsTemplateAndInstallsDaemon(t *testing.T) {
 	}
 	if s := out(); !strings.Contains(s, "Daemon answers at") || !strings.Contains(s, "Connected over daemon") {
 		t.Errorf("output:\n%s", s)
+	}
+	sshCfg, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".ssh", "config"))
+	if err != nil || !strings.Contains(string(sshCfg), "Host *.pooka") || !strings.Contains(string(sshCfg), "ssh-proxy %h") {
+		t.Errorf("ssh config: %q %v", sshCfg, err)
+	}
+	if st, _ := os.Stat(filepath.Join(os.Getenv("HOME"), ".ssh", "config")); st.Mode().Perm() != 0o600 {
+		t.Errorf("ssh config mode %o", st.Mode().Perm())
+	}
+	// A second run leaves the file alone.
+	home := os.Getenv("HOME")
+	a2, out2, _ := newSetupApp(t, setupHost(), "")
+	t.Setenv("HOME", home) // newSetupApp moved HOME; point it back at the same ssh config
+	if code := a2.Execute(context.Background(), []string{"setup", "--yes", "--daemon=false"}); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out2())
+	}
+	if again, _ := os.ReadFile(filepath.Join(home, ".ssh", "config")); strings.Count(string(again), "Host *.pooka") != 1 {
+		t.Errorf("entry duplicated:\n%s", again)
 	}
 }
 
