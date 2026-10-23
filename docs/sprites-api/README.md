@@ -124,6 +124,7 @@ How the `pooka` CLI maps onto the API (internal/backend/httpapi):
 
 | `url --auth` | `PUT /v1/sprites/{name}` with `url_settings` |
 | `idle` | `PUT /pooka/v1/sprites/{name}/settings` |
+| `ip`, `ssh-proxy` | `GET /v1/sprites/{name}`; `ssh-proxy` adds `POST /pooka/v1/sprites/{name}/start` when stopped, then connects to port 22 itself |
 
 Status mapping: a running container reports `running`; a stopped one reports `cold`.
 pooka has no `warm` state. With a `domain` in pookad.yaml the `url` field is

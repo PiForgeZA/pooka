@@ -45,6 +45,7 @@ type setupOptions struct {
 	DaemonURL     string
 	Domain        string // DNS suffix for environment URLs (ADR 0008); default <ip>.sslip.io
 	Pookad        string // local pookad binary to push instead of downloading a release
+	SSHConfig     bool   // add the Host *.pooka entry to ~/.ssh/config
 	Yes           bool
 }
 
@@ -85,6 +86,7 @@ flags and defaults without asking.`,
 	f.StringVar(&o.DaemonURL, "daemon-url", "", "URL clients use for pookad (default https://api.<domain>)")
 	f.StringVar(&o.Domain, "domain", "", "DNS suffix for environment URLs (default <host ip>.sslip.io)")
 	f.StringVar(&o.Pookad, "pookad", "", "push this local pookad binary instead of downloading the release")
+	f.BoolVar(&o.SSHConfig, "ssh-config", true, "add a Host *"+SSHSuffix+" entry to ~/.ssh/config so `ssh <name>"+SSHSuffix+"` works")
 	f.BoolVarP(&o.Yes, "yes", "y", false, "do not ask; use the flags and defaults")
 	return c
 }
@@ -420,6 +422,19 @@ func (a *App) runSetup(ctx context.Context, o setupOptions) error {
 	}
 	say("Written.")
 
+	// SSH by name: one Host entry serves every environment.
+	if o.SSHConfig && p.askYN(fmt.Sprintf("Add a Host *%s entry to %s so `ssh <name>%s` works", SSHSuffix, sshConfigPath(), SSHSuffix), true) {
+		wrote, err := installSSHConfig()
+		switch {
+		case err != nil:
+			say("Warning: could not update %s: %v. Print the entry with `pooka ssh-config`.", sshConfigPath(), err)
+		case wrote:
+			say("Added Host *%s to %s.", SSHSuffix, sshConfigPath())
+		default:
+			say("%s already has a Host *%s entry.", sshConfigPath(), SSHSuffix)
+		}
+	}
+
 	// Verify.
 	transport := "ssh"
 	if cfg.DaemonURL != "" {
@@ -434,7 +449,7 @@ func (a *App) runSetup(ctx context.Context, o setupOptions) error {
 			}
 		}
 	}
-	say("\nNext:\n  pooka create dev1\n  pooka console dev1")
+	say("\nNext:\n  pooka create dev1\n  pooka console dev1\n  ssh dev1%s                 # by name; wakes it when stopped", SSHSuffix)
 	if cfg.DaemonURL != "" && strings.HasPrefix(cfg.DaemonURL, "https://") {
 		ca := config.CAPath()
 		say("  pooka url dev1 --open     # the environment's URL, port 8080 inside\n\nBrowsers trust %s after a one-time step, then a restart:\n  Linux, Chrome:  certutil -d sql:$HOME/.pki/nssdb -A -t \"C,,\" -n pooka -i %s   (libnss3-tools)\n  Linux, system:  sudo cp %s /usr/local/share/ca-certificates/pooka.crt && sudo update-ca-certificates\n  macOS:          security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db %s\n  Windows:        Import-Certificate -FilePath %s -CertStoreLocation Cert:\\CurrentUser\\Root\n  Firefox:        Settings > Privacy and Security > Certificates > Import",

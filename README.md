@@ -42,6 +42,8 @@ pooka use dev1                    # make dev1 the default for this directory (.p
 pooka url dev1 --open             # https://dev1-local.<domain> -> port 8080 inside; wakes it
 pooka url dev1 --auth public      # let anyone who can reach the host open it
 pooka idle dev1 2h                # stop after 2 h without activity (default 30 min; off)
+ssh dev1.pooka                    # by name, via pooka ssh-proxy; wakes it when stopped
+herdr --remote pooka@dev1.pooka   # any SSH tool works the same way; pooka ip dev1 prints the address
 pooka destroy dev1                # delete it and its checkpoints
 ```
 
@@ -119,6 +121,14 @@ needed on any client. By default only token holders may open a URL: `pooka url
 who can reach the host. The certificate comes from a CA the daemon generates;
 `pooka setup` saves it to `~/.config/pooka/ca.pem` and prints the one-time step
 that makes browsers trust it.
+
+SSH reaches an environment by name. `pooka setup` adds one `Host *.pooka` entry to
+`~/.ssh/config` (or print it with `pooka ssh-config`), whose ProxyCommand asks pooka
+for the address and starts the environment when it is stopped. So `ssh dev1.pooka`,
+`herdr --remote pooka@dev1.pooka` and an IDE's remote SSH all work without looking
+up an IP, on any network that reaches the daemon and the environment. Host keys go
+to `~/.config/pooka/known_hosts`; `destroy` drops the entry so a new environment
+under the same name is accepted.
 
 An environment with no activity for 30 minutes stops. Activity is a URL request, an
 exec session, a file or checkpoint call, or any established TCP connection inside

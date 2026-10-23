@@ -170,6 +170,7 @@ func (a *App) Root() *cobra.Command {
 		a.checkpointCmd(), a.restoreCmd(),
 		a.startCmd(), a.stopCmd(), a.destroyCmd(), a.useCmd(),
 		a.urlCmd(), a.idleCmd(),
+		a.ipCmd(), a.sshProxyCmd(), a.sshConfigCmd(),
 		a.setupCmd(),
 	)
 	return root
@@ -722,6 +723,7 @@ func (a *App) destroyCmd() *cobra.Command {
 			if a.ActiveEnv() == name {
 				_ = config.SetActiveEnv("")
 			}
+			forgetHostKey(name) // the next environment under this name has a new key
 			return nil
 		},
 	}

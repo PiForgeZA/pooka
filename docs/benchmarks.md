@@ -107,6 +107,8 @@ domain `192-168-68-200.sslip.io`. Measured from the dev container (LXC 111) with
 | URL request, `?token=` sets the cookie and redirects | 1 redirect | | |
 | **wake by URL request** (stopped, python http.server as a systemd unit) | **4.3 to 9.6 s** (two runs) | under 30 s, then 502 | ok |
 | second request, environment running | 0.004 s | | |
+| `ssh <name>.pooka hostname`, running (ProxyCommand `pooka ssh-proxy`, 2026-10-23) | 0.97 s | | one daemon lookup plus the SSH handshake |
+| `ssh <name>.pooka hostname`, stopped (wake, then sshd) | 4.6 s | | |
 | `pooka create --idle-timeout 2m` | 9.5 s | | create unchanged |
 
 The wake time is `pct start` (about 2.7 s) plus the container's boot to the point
