@@ -210,24 +210,68 @@ func TestActivityFromRequests(t *testing.T) {
 	s.started = now
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
+	// SPEC 18.5: activity is a filesystem read or write, a checkpoint create or
+	// restore, a start, and an exec session. Reads of information are not.
 	cases := []struct {
 		method, path string
+		body         string
 		active       bool
 	}{
-		{"GET", "/v1/sprites/dev1/fs/read?path=/etc/hostname", true},
-		{"GET", "/v1/sprites/dev1/fs/list?path=/", true},
-		{"POST", "/pooka/v1/sprites/dev1/start", true},
-		{"GET", "/v1/sprites/dev1", false},
-		{"GET", "/v1/sprites/dev1/checkpoints", false},
-		{"GET", "/v1/sprites", false},
+		{"GET", "/v1/sprites/dev1/fs/read?path=/etc/hostname", "", true},
+		{"GET", "/v1/sprites/dev1/fs/list?path=/", "", true},
+		{"PUT", "/v1/sprites/dev1/fs/write?path=/tmp/x", "hello", true},
+		{"POST", "/v1/sprites/dev1/fs/chown", `{"path":"/tmp/x","uid":"pooka"}`, true},
+		{"POST", "/v1/sprites/dev1/checkpoint", "", true},
+		{"POST", "/v1/sprites/dev1/checkpoints/cp-1/restore", "", true},
+		{"POST", "/pooka/v1/sprites/dev1/start", "", true},
+		{"GET", "/v1/sprites/dev1", "", false},
+		{"PUT", "/v1/sprites/dev1", `{}`, false},
+		{"PUT", "/pooka/v1/sprites/dev1/settings", `{}`, false},
+		{"GET", "/v1/sprites/dev1/checkpoints", "", false},
+		{"GET", "/v1/sprites/dev1/checkpoints/cp-1", "", false},
+		{"DELETE", "/pooka/v1/sprites/dev1/checkpoints/cp-1", "", false},
+		{"GET", "/v1/sprites/dev1/exec", "", false}, // the session list, not an exec
+		{"POST", "/v1/sprites/dev1/exec/42/kill", "", false},
+		{"GET", "/v1/sprites", "", false},
+		{"POST", "/pooka/v1/sprites/dev1/stop", "", false},
 	}
 	for _, c := range cases {
 		now = now.Add(time.Minute)
-		do(t, ts, c.method, c.path, nil, "secret")
-		got := s.lastActivity("dev1").Equal(now)
+		do(t, ts, c.method, c.path, strings.NewReader(c.body), "secret")
+		got := s.lastActivity(backend.Env{Name: "dev1"}).Equal(now)
 		if got != c.active {
 			t.Errorf("%s %s: activity recorded %v, want %v", c.method, c.path, got, c.active)
 		}
+	}
+}
+
+func TestActivityFromHTTPExec(t *testing.T) {
+	fb := backendtest.New()
+	s := New(fb, "secret")
+	now := time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+	s.Now = func() time.Time { return now }
+	s.started = now
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	now = now.Add(time.Minute)
+	do(t, ts, "POST", "/v1/sprites/dev1/exec?cmd=true", nil, "secret")
+	if !s.lastActivity(backend.Env{Name: "dev1"}).Equal(now) {
+		t.Error("an HTTP exec is an exec session and must count as activity")
+	}
+}
+
+func TestIdleCreationCountsAsActivity(t *testing.T) {
+	// A daemon that has run for hours must not stop an environment created a
+	// minute ago, even though no request has touched it since.
+	s, fb, now := newIdleServer(t)
+	s.started = now.Add(-2 * time.Hour)
+	fb.Envs["dev3"] = backend.Env{Name: "dev3", VMID: 9102, Status: "running", Created: now.Add(-time.Minute)}
+	if got := s.idleTick(context.Background()); len(got) != 1 || got[0] != "dev1" {
+		t.Fatalf("want only dev1 stopped, got %v", got)
+	}
+	*now = now.Add(31 * time.Minute)
+	if got := s.idleTick(context.Background()); len(got) != 1 || got[0] != "dev3" {
+		t.Errorf("want dev3 stopped after its timeout, got %v", got)
 	}
 }
 

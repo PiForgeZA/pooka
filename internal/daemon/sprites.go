@@ -131,7 +131,6 @@ func (s *Server) createSprite(w http.ResponseWriter, r *http.Request) {
 		writeBackendError(w, err)
 		return
 	}
-	s.Touch(req.Name)
 	if env.Created.IsZero() {
 		env.Created = time.Now()
 	}

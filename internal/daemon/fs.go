@@ -37,7 +37,6 @@ func (s *Server) fsExec(r *http.Request, script string, args []string, stdin *by
 	if stdin != nil {
 		opts.Stdin = stdin
 	}
-	s.Touch(r.PathValue("name"))
 	code, err = s.Backend.Exec(r.Context(), r.PathValue("name"), cmd, opts)
 	return out.String(), errb.String(), code, err
 }
@@ -50,7 +49,6 @@ func (s *Server) fsRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var out, errb bytes.Buffer
-	s.Touch(r.PathValue("name")) // a read is a filesystem call too (SPEC 18.5)
 	code, err := s.Backend.Exec(r.Context(), r.PathValue("name"), []string{"cat", "--", p}, backend.ExecOptions{Stdout: &out, Stderr: &errb, Root: true})
 	if err != nil {
 		writeBackendError(w, err)
