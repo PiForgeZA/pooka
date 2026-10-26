@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -443,14 +444,25 @@ func (a *App) lsCmd() *cobra.Command {
 				return err
 			}
 			active := a.ActiveEnv()
+			// The daemon fills URL; over SSH it is always empty and the
+			// column would only add noise.
+			withURL := slices.ContainsFunc(envs, func(e backend.Env) bool { return e.URL != "" })
 			w := tabwriter.NewWriter(a.Out, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tVMID\tSTATUS\tIP")
+			fmt.Fprint(w, "NAME\tVMID\tSTATUS\tIP")
+			if withURL {
+				fmt.Fprint(w, "\tURL")
+			}
+			fmt.Fprintln(w)
 			for _, e := range envs {
 				mark := ""
 				if e.Name == active {
 					mark = " *"
 				}
-				fmt.Fprintf(w, "%s%s\t%d\t%s\t%s\n", e.Name, mark, e.VMID, e.Status, orDash(e.IP))
+				fmt.Fprintf(w, "%s%s\t%d\t%s\t%s", e.Name, mark, e.VMID, e.Status, orDash(e.IP))
+				if withURL {
+					fmt.Fprintf(w, "\t%s", orDash(e.URL))
+				}
+				fmt.Fprintln(w)
 			}
 			return w.Flush()
 		},
