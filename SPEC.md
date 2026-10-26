@@ -322,6 +322,9 @@ ADR 0008 and ADR 0009 record the decisions.
   TLS. `pooka setup` sets `daemon_url` to `https://api.<domain>`.
 - On first start pookad writes a CA and a wildcard certificate under
   `/etc/pooka/tls/`. `tls_cert` and `tls_key` in `pookad.yaml` replace them.
+- pookad checks the certificate once a day while it runs. It renews the generated
+  leaf when it has less than 30 days left, and reloads `tls_cert` and `tls_key`
+  from disk. A renewal does not need a restart. A change to `domain` does.
 - `pooka setup` copies the CA certificate to `~/.config/pooka/ca.pem` and prints
   the command that trusts it. The CLI uses `ca.pem` when the file exists.
 

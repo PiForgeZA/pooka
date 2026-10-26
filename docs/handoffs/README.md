@@ -24,4 +24,5 @@ Sections: State, Facts needed to continue, Next steps in order, Suggested skills
 | [0005](0005-phase-3-urls-wake-idle.md) | Phase 3: URL per environment, TLS, wake-on-request, idle stop |
 | [0006](0006-issue-3-exec-orphans.md) | Issue #3: exec process outlives the client (done, merged in v0.2.1) |
 | [0007](0007-phase-3-built-and-verified.md) | Phase 3 built and verified live (done, merged as #7) |
-| [0008](0008-ssh-by-name.md) | SSH by name: ssh-proxy, ssh-config, ip; verified live; review and merge |
+| [0008](0008-ssh-by-name.md) | SSH by name: ssh-proxy, ssh-config, ip (done, merged as #8, released in v0.4.0) |
+| [0009](0009-post-v0.4.0-follow-ups.md) | Follow-ups after v0.4.0: custom domain test, live cert renewal, URLs in ls, sprite url check, activity refactor, tunnel ADR, `pooka upgrade` |
