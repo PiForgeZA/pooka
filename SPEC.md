@@ -159,6 +159,8 @@ Each command maps to `pct` calls on the host over SSH. The table gives the mappi
 | `pooka destroy <name>` | `pct stop`, then `pct destroy <vmid> --purge`. |
 | `pooka use <name>` | Write `.pooka` in the current directory. |
 | `pooka setup` | Section 8. Copies the embedded `scripts/` to `/root/pooka-scripts`, runs `build-template.sh` and `install-daemon.sh` there as needed. |
+| `pooka update [--cli\|--daemon] [--version vX.Y.Z] [--pookad <file>]` | Without flags, both the CLI and, when `host` is set, the daemon. CLI: download the release archive for this OS and architecture, verify it against `checksums.txt`, rename the binary over the running one. Refuse when the binary's directory is not writable and name it. Daemon: the `setup` steps on the host: copy the scripts, fetch or push `pookad`, run `install-daemon.sh`, which keeps `pookad.yaml`. Print the version before and after. `upgrade` is an alias. |
+| `pooka version` | Print the CLI version and the daemon version from `GET /healthz`, or from `pookad --version` over SSH when no `daemon_url` is set. |
 | `pooka url <name> [--auth sprite\|public] [--open]` | Section 18.4. `--auth` writes `url_auth` into the description with `pct set`. Daemon transport only; SSH has no URL. |
 | `pooka idle <name> [<duration>\|off]` | Section 18.5. Writes `idle_timeout` into the description with `pct set`. Without a value, shows it. |
 | `pooka ip <name>` | Print the IP address from `Get`. Fails with a hint when the environment is stopped. |

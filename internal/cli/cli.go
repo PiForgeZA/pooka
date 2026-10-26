@@ -52,6 +52,13 @@ type App struct {
 	ActiveEnv func() string
 	// OpenURL opens a URL in the browser. nil means the platform opener.
 	OpenURL func(u string) error
+	// Executable returns the path of the running binary for `pooka update`.
+	// nil means os.Executable with symlinks resolved. Tests point at a file.
+	Executable func() (string, error)
+	// ReleaseAPI and ReleaseDownload replace the GitHub endpoints that
+	// `pooka update` reads. Empty means the real ones. Tests set a local server.
+	ReleaseAPI      string
+	ReleaseDownload string
 }
 
 // NewApp wires the real config and the backend opener.
@@ -147,8 +154,9 @@ func (a *App) Root() *cobra.Command {
 	root.SetErr(a.Err)
 	root.PersistentFlags().String("transport", "", "ssh or daemon (default: daemon when daemon_url is set, else ssh)")
 	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
-		if cmd.Name() == "setup" {
-			return nil // setup makes the config a backend would need
+		switch cmd.Name() {
+		case "setup", "update", "version":
+			return nil // setup makes the config a backend would need; the others talk to the host themselves
 		}
 		a.Transport = a.transport(cmd)
 		if a.Backend != nil {
@@ -171,7 +179,7 @@ func (a *App) Root() *cobra.Command {
 		a.startCmd(), a.stopCmd(), a.destroyCmd(), a.useCmd(),
 		a.urlCmd(), a.idleCmd(),
 		a.ipCmd(), a.sshProxyCmd(), a.sshConfigCmd(),
-		a.setupCmd(),
+		a.setupCmd(), a.updateCmd(), a.versionCmd(),
 	)
 	return root
 }

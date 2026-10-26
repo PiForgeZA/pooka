@@ -198,14 +198,8 @@ func probeHost(ctx context.Context, h host.Host) (hostFacts, error) {
 	f.Node = strings.TrimSpace(node)
 	ips, _ := hostOut(ctx, h, "hostname", "-I")
 	f.IP = strings.Fields(ips + " ")[0]
-	arch, _ := hostOut(ctx, h, "uname", "-m")
-	switch strings.TrimSpace(arch) {
-	case "x86_64":
-		f.Arch = "amd64"
-	case "aarch64", "arm64":
-		f.Arch = "arm64"
-	default:
-		return f, fmt.Errorf("unsupported host architecture %q", strings.TrimSpace(arch))
+	if f.Arch, err = hostArch(ctx, h); err != nil {
+		return f, err
 	}
 	pvesm, err := hostOut(ctx, h, "pvesm", "status")
 	if err != nil {
@@ -540,21 +534,8 @@ chmod 0755 "$dir/pookad"`
 
 func (a *App) installDaemon(ctx context.Context, h host.Host, o setupOptions, facts hostFacts) error {
 	say := func(format string, args ...any) { fmt.Fprintf(a.Out, format+"\n", args...) }
-	if o.Pookad != "" {
-		say("Copying %s to the host...", o.Pookad)
-		if err := h.CopyTo(ctx, o.Pookad, hostScriptsDir+"/pookad"); err != nil {
-			return err
-		}
-	} else {
-		tag := releaseTag()
-		if tag == "" {
-			say("This pooka is a dev build; fetching the latest pookad release on the host...")
-		} else {
-			say("Fetching pookad %s on the host...", tag)
-		}
-		if err := streamHost(ctx, h, a.Out, a.Err, "sh", "-c", fetchPookadScript, "sh", tag, facts.Arch, hostScriptsDir); err != nil {
-			return fmt.Errorf("download pookad: %w (pass --pookad <binary> to push one instead)", err)
-		}
+	if err := a.putPookad(ctx, h, o.Pookad, releaseTag(), facts.Arch); err != nil {
+		return err
 	}
 	// pookad.yaml with the chosen defaults, unless the host already has one.
 	if _, err := hostOut(ctx, h, "test", "-f", "/etc/pooka/pookad.yaml"); err != nil {
