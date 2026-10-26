@@ -49,8 +49,13 @@ pooka destroy dev1                # delete it and its checkpoints
 
 Every environment comes from one template that you build once. The default template
 has Ubuntu 24.04, git and build tools, mise-managed Node, Python and Go, Claude Code,
-Codex, herdr, and an SSH server that accepts your key. Edit
-`scripts/template/mise.toml` and `scripts/template/provision.sh` to change that.
+Codex, herdr, and an SSH server that accepts your key. Both agents come with
+[rtk](https://github.com/rtk-ai/rtk), the
+[mattpocock/skills](https://github.com/mattpocock/skills) and
+[ponytail](https://github.com/DietrichGebert/ponytail) plugins, and Claude Code with
+the [security hooks](https://github.com/slavaspitsyn/claude-code-security-hooks).
+Codex asks you to trust ponytail's hooks once per environment, in `/hooks`. Edit
+`scripts/template/mise.toml` and `scripts/template/provision.sh` to change the set.
 
 ## Quick start
 
