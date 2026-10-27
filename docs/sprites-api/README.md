@@ -42,6 +42,24 @@ Findings:
 - `sprite console` runs `/.sprite/bin/sprite-console`, a Fly-specific binary. A
   compatible server maps that path to a login shell.
 
+## URL commands against pookad, 2026-10-26
+
+Handoff 0009 item 4. The same CLI version ran against the live daemon on
+`http://192.168.68.200:7700` with `SPRITES_API_URL`, `SPRITE_TOKEN` and
+`SPRITE_ORG=local`, on an environment made with `pooka create`.
+
+| CLI command | Result |
+|---|---|
+| `sprite url -s <name>` | prints the pooka URL and `Auth: sprite`; the CLI calls the command deprecated |
+| `sprite url update -s <name> --auth public` | `PUT /v1/sprites/<name>`; the daemon stored it, `sprite info` shows `Auth: public` |
+| `sprite info -s <name>` | name, org, `ID: sprite-<vmid>`, status, created, URL, auth |
+| `sprite config update -s <name> --url-auth sprite\|public` | the non-deprecated form; same `PUT`, same effect |
+
+Each setting change took effect at the proxy at once: with `public` a request
+without credentials reached the environment (502, nothing on 8080); with `sprite`
+it got 401. Every `PUT` took about 1.9 s, which is the `pct set` of the container
+description. No daemon change was needed.
+
 ## WebSocket exec protocol (from asyncapi.json)
 
 Binary frames carry a one-byte prefix: `0x00` stdin (client to server), `0x01` stdout,

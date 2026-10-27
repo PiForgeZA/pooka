@@ -145,7 +145,7 @@ Each command maps to `pct` calls on the host over SSH. The table gives the mappi
 | Command | Host action |
 |---|---|
 | `pooka create <name>` | Section 9. |
-| `pooka ls` | `pct list`, filtered by the `pooka` tag. Show name, VMID, status, IP. |
+| `pooka ls` | `pct list`, filtered by the `pooka` tag. Show name, VMID, status, IP. Over the daemon, also the URL. |
 | `pooka exec <name> -- <cmd...>` | `lxc-attach` runs an exec supervisor and `runuser -l pooka --session-command '<cmd...>'`. Add `-t` for a TTY. `--root` runs as root. The supervisor ends the process session when the client disconnects. See ADR 0006. |
 | `pooka console <name>` | `exec` of `bash -l` with a TTY. |
 | `pooka push <name> <local> <remote>` | `scp` to host, then `pct push`. |
@@ -322,6 +322,9 @@ ADR 0008 and ADR 0009 record the decisions.
   TLS. `pooka setup` sets `daemon_url` to `https://api.<domain>`.
 - On first start pookad writes a CA and a wildcard certificate under
   `/etc/pooka/tls/`. `tls_cert` and `tls_key` in `pookad.yaml` replace them.
+- pookad checks the certificate once a day while it runs. It renews the generated
+  leaf when it has less than 30 days left, and reloads `tls_cert` and `tls_key`
+  from disk. A renewal does not need a restart. A change to `domain` does.
 - `pooka setup` copies the CA certificate to `~/.config/pooka/ca.pem` and prints
   the command that trusts it. The CLI uses `ca.pem` when the file exists.
 
