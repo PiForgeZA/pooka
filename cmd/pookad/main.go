@@ -122,8 +122,15 @@ func main() {
 
 	if cfg.Domain != "" && cfg.ProxyListen != "" {
 		s.Domain = cfg.Domain
-		cert, err := loadCert(cfg, filepath.Join(filepath.Dir(*cfgPath), "tls"))
-		if err != nil {
+		// The pair is checked once a day, so a leaf that nears expiry, a
+		// changed domain or replaced tls_cert files are served without a
+		// restart. The first load runs here so a bad setup fails at start.
+		tlsDir := filepath.Join(filepath.Dir(*cfgPath), "tls")
+		certs := &pki.Reloader{
+			Load: func(now time.Time) (tls.Certificate, error) { return loadCert(cfg, tlsDir, now) },
+			Logf: log.Printf,
+		}
+		if _, err := certs.GetCertificate(nil); err != nil {
 			log.Fatalf("proxy tls: %v", err)
 		}
 		// The proxy listener logs once; the API behind it must not log again.
@@ -131,7 +138,7 @@ func main() {
 		psrv := &http.Server{
 			Addr:              cfg.ProxyListen,
 			Handler:           daemon.LogRequests(log.Default(), p),
-			TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
+			TLSConfig:         &tls.Config{GetCertificate: certs.GetCertificate, MinVersion: tls.VersionTLS12},
 			ReadHeaderTimeout: 10 * time.Second,
 		}
 		servers = append(servers, psrv)
@@ -170,15 +177,15 @@ func main() {
 }
 
 // loadCert returns the configured certificate pair, or the generated one under
-// dir (ADR 0008).
-func loadCert(cfg Config, dir string) (tls.Certificate, error) {
+// dir (ADR 0008), renewed when it nears expiry or the domain changed.
+func loadCert(cfg Config, dir string, now time.Time) (tls.Certificate, error) {
 	if cfg.TLSCert != "" || cfg.TLSKey != "" {
 		if cfg.TLSCert == "" || cfg.TLSKey == "" {
 			return tls.Certificate{}, errors.New("set both tls_cert and tls_key, or neither")
 		}
 		return tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
 	}
-	cert, err := pki.EnsureCert(dir, cfg.Domain, time.Now())
+	cert, err := pki.EnsureCert(dir, cfg.Domain, now)
 	if err != nil {
 		return cert, err
 	}

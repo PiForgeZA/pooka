@@ -118,3 +118,25 @@ the wait is the service's own start time, not a timer.
 The idle loop's connection check, `ss -Htn state established` run as root inside the
 container, lists an open SSH login from the LAN as one established line and nothing
 once the login ends. See the idle stop live check in handoff 0007.
+
+## 2026-10-26, custom domain on a LAN DNS
+
+Handoff 0009 item 1. The host moved from `192-168-68-200.sslip.io` to
+`pooka.piforge.internal`, served by an AdGuard instance on the LAN with one wildcard
+record, `*.pooka.piforge.internal` to the host address. Steps: set `domain:` in
+`/etc/pooka/pookad.yaml`, then `pooka setup --yes` on the client. Setup reinstalled
+pookad v0.4.0, kept the host's pookad.yaml, read the installed domain back, and
+wrote `daemon_url: https://api.pooka.piforge.internal` into the client config. No
+code change was needed.
+
+| Check | Result |
+|---|---|
+| pookad start | issued a new leaf for `*.pooka.piforge.internal`, `api.pooka.piforge.internal` and the apex, from the existing CA |
+| `pooka ls` at `https://api.pooka.piforge.internal` with the old `ca.pem` | ok; URLs print with the new domain |
+| URL with `?token=` | one redirect, cookie set, 200 from the server on 8080 |
+| URL without auth | 401 |
+| URL of a stopped environment | started it; 502 after 30 s because nothing listened on 8080 after the cold boot, as SPEC 18.3 says |
+
+The CA does not change with the domain, so clients keep their `ca.pem`. Only
+`daemon_url` moves, and `pooka setup` does that. One cosmetic gap: before setup reads
+the host's domain, it still prints the sslip default in its explanation line.
