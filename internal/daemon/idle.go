@@ -10,31 +10,27 @@ import (
 	"github.com/PiForgeZA/pooka/internal/backend"
 )
 
-// Activity tracking and the idle loop. See ADR 0009 and SPEC section 18.5.
+// The idle loop. See ADR 0009 and SPEC section 18.5. activity.go says what
+// counts as activity; this file is the only reader of the record.
 //
-// Activity is any proxy request, exec session, filesystem call, checkpoint call or
-// start for an environment. The daemon keeps the last activity time in memory. A
-// daemon start counts as activity for every environment, so a restart never stops
-// anything before one full timeout has passed.
+// The daemon keeps the last activity time in memory. A daemon start counts as
+// activity for every environment, so a restart never stops anything before one
+// full timeout has passed. A create counts too: a fresh environment has its
+// creation time as a floor.
 
-// Touch records activity for an environment now.
-func (s *Server) Touch(name string) {
+// lastActivity returns the latest of the recorded activity, the daemon start
+// and the environment's creation.
+func (s *Server) lastActivity(e backend.Env) time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.activity == nil {
-		s.activity = map[string]time.Time{}
+	t := s.started
+	if a, ok := s.activity[e.Name]; ok && a.After(t) {
+		t = a
 	}
-	s.activity[name] = s.now()
-}
-
-// lastActivity returns the last activity time, or the daemon start time.
-func (s *Server) lastActivity(name string) time.Time {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if t, ok := s.activity[name]; ok {
-		return t
+	if e.Created.After(t) {
+		t = e.Created
 	}
-	return s.started
+	return t
 }
 
 // hasSessions reports whether an exec session is open on the environment.
@@ -93,7 +89,7 @@ func (s *Server) idleTick(ctx context.Context) []string {
 		if timeout <= 0 {
 			continue
 		}
-		idle := now.Sub(s.lastActivity(e.Name))
+		idle := now.Sub(s.lastActivity(e))
 		if idle < timeout || s.hasSessions(e.Name) {
 			continue
 		}

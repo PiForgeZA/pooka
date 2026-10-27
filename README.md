@@ -233,7 +233,11 @@ spec does not have.
 
 The daemon's proxy on 443 routes on the first DNS label only: `dev1-local` in
 `dev1-local.192-168-68-200.sslip.io`. The rest of the name is ignored, so any name
-that resolves to the host works, including one on your own LAN DNS. The host name
+that resolves to the host works, including one on your own LAN DNS. To move to one,
+add a wildcard record for `*.<domain>` to the host, set `domain` in
+`/etc/pooka/pookad.yaml`, and run `pooka setup --yes` again: it restarts the daemon
+and points `daemon_url` at `https://api.<domain>`. The daemon issues a new
+certificate from the same CA, so clients keep their `ca.pem`. The host name
 `api.<domain>` on the same listener serves the API over TLS. The URL auth setting
 and the idle timeout live in the container description, next to the creation time,
 so Proxmox stays the only state store (ADR 0008, 0009).
