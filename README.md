@@ -73,6 +73,9 @@ The script downloads the latest release for your OS and architecture, verifies i
 against the release checksums, and puts `pooka` in `~/.local/bin`. It needs no root.
 `--version v0.2.1` pins a release, `--bin-dir DIR` changes the target.
 
+Later releases need no script: `pooka update` replaces the CLI and, once a host is
+set up, the daemon on it. `pooka version` shows both versions.
+
 Prefer not to pipe a script into a shell? Download the archive from a
 [release](https://github.com/PiForgeZA/pooka/releases) and put `pooka` on your PATH,
 or build from source with Go 1.24 or newer:
