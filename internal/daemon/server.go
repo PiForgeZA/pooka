@@ -82,7 +82,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": s.Version})
 	})
-	return s.auth(mux)
+	return s.auth(s.recordActivity(mux))
 }
 
 func (s *Server) auth(next http.Handler) http.Handler {
