@@ -82,7 +82,6 @@ func (s *Server) createSpriteWithOptions(w http.ResponseWriter, r *http.Request)
 		writeBackendError(w, err)
 		return
 	}
-	s.Touch(req.Name)
 	if env.Created.IsZero() {
 		env.Created = time.Now()
 	}
@@ -135,9 +134,6 @@ func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) startSprite(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	err := s.Backend.Start(r.Context(), name)
-	if err == nil {
-		s.Touch(name)
-	}
 	s.noContent(w, err)
 }
 

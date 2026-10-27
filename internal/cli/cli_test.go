@@ -201,3 +201,27 @@ func TestCreateOptionsPerTransport(t *testing.T) {
 		t.Errorf("daemon: %v", fb.calls)
 	}
 }
+
+func TestLsShowsURLColumnOnlyWhenOneExists(t *testing.T) {
+	fb := &fakeBackend{envs: []backend.Env{{Name: "dev1", VMID: 9100, Status: "running", IP: "10.0.0.5"}, {Name: "dev2", VMID: 9101, Status: "stopped"}}}
+	a, out, _ := newApp(fb, "", "")
+	if code := a.Execute(context.Background(), []string{"ls"}); code != 0 {
+		t.Fatal(code)
+	}
+	if strings.Contains(out.String(), "URL") {
+		t.Errorf("no environment has a URL, column must be absent:\n%s", out.String())
+	}
+
+	fb.envs[0].URL = "https://dev1-local.example.test"
+	a, out, _ = newApp(fb, "", "")
+	if code := a.Execute(context.Background(), []string{"ls"}); code != 0 {
+		t.Fatal(code)
+	}
+	s := out.String()
+	if !strings.Contains(s, "IP        URL") || !strings.Contains(s, "10.0.0.5  https://dev1-local.example.test") {
+		t.Errorf("want a URL column:\n%s", s)
+	}
+	if !strings.Contains(s, "stopped  -         -") {
+		t.Errorf("dev2 has no URL, want a dash:\n%s", s)
+	}
+}
