@@ -145,7 +145,7 @@ Each command maps to `pct` calls on the host over SSH. The table gives the mappi
 | Command | Host action |
 |---|---|
 | `pooka create <name>` | Section 9. |
-| `pooka ls` | `pct list`, filtered by the `pooka` tag. Show name, VMID, status, IP. |
+| `pooka ls` | `pct list`, filtered by the `pooka` tag. Show name, VMID, status, IP. Over the daemon, also the URL. |
 | `pooka exec <name> -- <cmd...>` | `lxc-attach` runs an exec supervisor and `runuser -l pooka --session-command '<cmd...>'`. Add `-t` for a TTY. `--root` runs as root. The supervisor ends the process session when the client disconnects. See ADR 0006. |
 | `pooka console <name>` | `exec` of `bash -l` with a TTY. |
 | `pooka push <name> <local> <remote>` | `scp` to host, then `pct push`. |
