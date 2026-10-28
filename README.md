@@ -55,7 +55,8 @@ Codex, herdr, and an SSH server that accepts your key. Both agents come with
 [ponytail](https://github.com/DietrichGebert/ponytail) plugins, and Claude Code with
 the [security hooks](https://github.com/slavaspitsyn/claude-code-security-hooks).
 Codex asks you to trust ponytail's hooks once per environment, in `/hooks`. Edit
-`scripts/template/mise.toml` and `scripts/template/provision.sh` to change the set.
+`scripts/template/mise.toml`, `scripts/template/provision.sh` and
+`scripts/template/agents.sh` to change the set.
 
 ## Quick start
 
