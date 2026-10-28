@@ -305,3 +305,25 @@ func TestContextCancelDuringWake(t *testing.T) {
 	}
 	_ = backend.ErrNotFound
 }
+
+func TestActivityAndUnauthorizedWake(t *testing.T) {
+	for _, name := range []string{"dev1", "dev2"} {
+		t.Run(name, func(t *testing.T) {
+			p, _, fb, _ := newProxy(t)
+			var touched []string
+			p.Touch = func(n string) { touched = append(touched, n) }
+			req := httptest.NewRequest("GET", "http://"+name+"-local."+domain+"/", nil)
+			denied := httptest.NewRecorder()
+			p.ServeHTTP(denied, req)
+			if denied.Code != 401 || len(touched) != 0 || strings.Contains(strings.Join(fb.Calls, "\n"), "start "+name) {
+				t.Fatalf("denied=%d activity=%v calls=%v", denied.Code, touched, fb.Calls)
+			}
+			req.Header.Set("Authorization", "Bearer secret")
+			ok := httptest.NewRecorder()
+			p.ServeHTTP(ok, req)
+			if ok.Code != 200 || len(touched) != 1 || touched[0] != name {
+				t.Fatalf("status=%d activity=%v", ok.Code, touched)
+			}
+		})
+	}
+}
