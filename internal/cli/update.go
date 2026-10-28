@@ -209,6 +209,12 @@ func (a *App) updateDaemon(ctx context.Context, tag, pookad string) error {
 		return fmt.Errorf("install-daemon.sh failed: %w", err)
 	}
 	after := a.waitDaemonVersion(ctx, 15*time.Second)
+	if after == "unknown" {
+		return errors.New("cannot verify pookad after installation")
+	}
+	if pookad == "" && tag != "" && strings.TrimPrefix(after, "v") != strings.TrimPrefix(tag, "v") {
+		return fmt.Errorf("pookad version after installation is %s; expected %s", after, tag)
+	}
 	say("pookad: %s -> %s", before, after)
 	return nil
 }
