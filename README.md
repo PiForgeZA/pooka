@@ -99,6 +99,11 @@ installs the `pookad` daemon, saves its token and its CA certificate, and writes
 takes the defaults without asking, and `--daemon=false` keeps SSH as the transport.
 It ends with the one-time command that makes your browser trust the CA.
 
+On a second machine, the same command joins the host: the defaults come from the
+daemon that is already there, and the daemon is left alone when it runs the same
+version. `pooka update --daemon` upgrades it; `pooka setup --reinstall` installs it
+again.
+
 Then:
 
 ```
@@ -235,8 +240,8 @@ The daemon's proxy on 443 routes on the first DNS label only: `dev1-local` in
 `dev1-local.192-168-68-200.sslip.io`. The rest of the name is ignored, so any name
 that resolves to the host works, including one on your own LAN DNS. To move to one,
 add a wildcard record for `*.<domain>` to the host, set `domain` in
-`/etc/pooka/pookad.yaml`, and run `pooka setup --yes` again: it restarts the daemon
-and points `daemon_url` at `https://api.<domain>`. The daemon issues a new
+`/etc/pooka/pookad.yaml`, and run `pooka setup --yes --reinstall`: it restarts the
+daemon and points `daemon_url` at `https://api.<domain>`. The daemon issues a new
 certificate from the same CA, so clients keep their `ca.pem`. The host name
 `api.<domain>` on the same listener serves the API over TLS. The URL auth setting
 and the idle timeout live in the container description, next to the creation time,

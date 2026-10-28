@@ -114,6 +114,13 @@ token to `~/.config/pooka/token`, and verifies with a list. Every answer is a fl
 `--yes` takes the flags and defaults without asking. `--daemon=false` keeps SSH as the
 transport. `--pookad <file>` pushes a local daemon binary instead of the release.
 
+A host that already runs `pookad` is the source of the defaults: template, disk,
+cores, memory and domain from `/etc/pooka/pookad.yaml`, storage and bridge from the
+template's config. Flags the user sets still win. When the host runs the same
+version as the client, setup keeps the daemon: no binary push, no restart. So a
+second machine joins with `pooka setup --yes`. Setup installs again when the host
+has no `pookad`, runs another version, gets `--pookad`, or gets `--reinstall`.
+
 ## 9. Create
 
 `pooka create <name>` does these steps:

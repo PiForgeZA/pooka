@@ -280,3 +280,91 @@ func TestReleaseTag(t *testing.T) {
 		}
 	}
 }
+
+// joinedHost is a host that already runs pookad at this pooka's version, with
+// template 9000 on tank and vmbr1 and a LAN domain.
+func joinedHost() *host.Fake {
+	fh := setupHost()
+	fh.Rules = append([]host.FakeRule{
+		{Prefix: "cat /etc/pooka/pookad.yaml", Stdout: "listen: 0.0.0.0:7700\ntemplate: 9000\nvmid_range: [9100, 9199]\ndisk_gb: 64\ncores: 8\nmemory_mb: 16384\ndomain: pooka.piforge.internal\nproxy_listen: 0.0.0.0:443\n"},
+		{Prefix: "test -f /etc/pooka/pookad.yaml", Stdout: ""},
+		{Prefix: "/usr/local/bin/pookad --version", Stdout: "pookad version " + Version + "\n"},
+		{Prefix: "pct config 9000", Stdout: "hostname: pooka-template\ntemplate: 1\nrootfs: tank:vm-9000-disk-0,size=64G\nnet0: name=eth0,bridge=vmbr1,hwaddr=BC:24:11:00:00:01,ip=dhcp,type=veth\n"},
+	}, fh.Rules...)
+	return fh
+}
+
+func TestSetupJoinsAHostThatRunsPookad(t *testing.T) {
+	fh := joinedHost()
+	a, out, _ := newSetupApp(t, fh, "")
+	if code := a.Execute(context.Background(), []string{"setup", "--yes"}); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out())
+	}
+	if fh.Called("bash /root/pooka-scripts/install-daemon.sh") || fh.Called("env POOKA_DOMAIN") || fh.Called("sh -c set -e") {
+		t.Errorf("the daemon must not be installed again: %v", fh.Calls)
+	}
+	if c := strings.Join(fh.Copies, "\n"); strings.Contains(c, "/root/pooka-scripts") {
+		t.Errorf("no scripts or binary should be copied: %s", c)
+	}
+	cfg, _ := config.Load()
+	want := config.Config{Template: 9000, Storage: "tank", Bridge: "vmbr1", DiskGB: 64, Cores: 8, MemoryMB: 16384, DaemonURL: "https://api.pooka.piforge.internal"}
+	got := config.Config{Template: cfg.Template, Storage: cfg.Storage, Bridge: cfg.Bridge, DiskGB: cfg.DiskGB, Cores: cfg.Cores, MemoryMB: cfg.MemoryMB, DaemonURL: cfg.DaemonURL}
+	if got != want {
+		t.Errorf("config from the host:\n got %+v\nwant %+v", got, want)
+	}
+	if tok, _ := os.ReadFile(config.TokenPath()); strings.TrimSpace(string(tok)) != "tok-123" {
+		t.Errorf("token: %q", tok)
+	}
+	if s := out(); !strings.Contains(s, "keeping it") || !strings.Contains(s, "domain pooka.piforge.internal from /etc/pooka/pookad.yaml") {
+		t.Errorf("output:\n%s", s)
+	}
+}
+
+func TestSetupFlagsBeatTheHostDefaults(t *testing.T) {
+	fh := joinedHost()
+	a, out, _ := newSetupApp(t, fh, "")
+	if code := a.Execute(context.Background(), []string{"setup", "--yes", "--cores", "2"}); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out())
+	}
+	cfg, _ := config.Load()
+	if cfg.Cores != 2 || cfg.MemoryMB != 16384 {
+		t.Errorf("cores %d (want 2), memory %d (want 16384)", cfg.Cores, cfg.MemoryMB)
+	}
+}
+
+func TestSetupReinstallsAnotherVersion(t *testing.T) {
+	fh := joinedHost()
+	fh.Rules = append([]host.FakeRule{{Prefix: "/usr/local/bin/pookad --version", Stdout: "pookad version 0.0.1\n"}}, fh.Rules...)
+	a, out, _ := newSetupApp(t, fh, "")
+	bin := filepath.Join(t.TempDir(), "pookad")
+	os.WriteFile(bin, []byte("bin"), 0o755)
+	if code := a.Execute(context.Background(), []string{"setup", "--yes", "--pookad", bin}); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out())
+	}
+	if !fh.Called("env POOKA_DOMAIN=pooka.piforge.internal bash /root/pooka-scripts/install-daemon.sh") {
+		t.Errorf("another version must be installed: %v", fh.Calls)
+	}
+}
+
+func TestSetupReinstallFlag(t *testing.T) {
+	fh := joinedHost()
+	a, out, _ := newSetupApp(t, fh, "")
+	bin := filepath.Join(t.TempDir(), "pookad")
+	os.WriteFile(bin, []byte("bin"), 0o755)
+	if code := a.Execute(context.Background(), []string{"setup", "--yes", "--reinstall", "--pookad", bin}); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out())
+	}
+	if !fh.Called("env POOKA_DOMAIN=pooka.piforge.internal bash /root/pooka-scripts/install-daemon.sh") {
+		t.Errorf("--reinstall must install: %v", fh.Calls)
+	}
+}
+
+func TestTemplateStorageBridge(t *testing.T) {
+	s, b := templateStorageBridge("arch: amd64\nrootfs: local-lvm:vm-9000-disk-0,size=32G\nnet0: name=eth0,bridge=vmbr0,ip=dhcp\n")
+	if s != "local-lvm" || b != "vmbr0" {
+		t.Errorf("got %q %q", s, b)
+	}
+	if s, b := templateStorageBridge(""); s != "" || b != "" {
+		t.Errorf("empty: %q %q", s, b)
+	}
+}
