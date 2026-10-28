@@ -68,12 +68,17 @@ The template gives environments their speed. Build it once. Rebuild it when tool
    `scripts/template/mise.toml`. Edit it to change the tool set.
 4. Create a user named `pooka` with passwordless sudo. mise installs tools for this user.
    Commands run as `pooka`, not root.
-5. Place `/etc/pooka/firstboot.sh`. The create command runs this script once. See section 9.
-6. Clean caches and logs. Stop the container.
-7. Convert it with `pct template <id>`.
-8. Record the template ID in the pooka config file.
+5. Install the agent toolchain for the `pooka` user: rtk with its Claude Code hook and
+   Codex instructions, the `mattpocock/skills` and `ponytail` plugins for Claude Code
+   and for Codex, and the `claude-code-security-hooks` scripts with their settings.
+   Plugins update themselves when the agent starts. Codex does not trust a plugin's
+   hooks until the user accepts them once in `/hooks`; the skills work without that.
+6. Place `/etc/pooka/firstboot.sh`. The create command runs this script once. See section 9.
+7. Clean caches and logs. Stop the container.
+8. Convert it with `pct template <id>`.
+9. Record the template ID in the pooka config file.
 
-pooka ships a script, `scripts/build-template.sh`, that does steps 1 to 7. The script
+pooka ships a script, `scripts/build-template.sh`, that does steps 1 to 8. The script
 is embedded in the `pooka` binary; `pooka setup` copies it to the host and runs it.
 
 ## 8. Configuration
