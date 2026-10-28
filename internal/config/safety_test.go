@@ -1,9 +1,9 @@
 package config
 
 import (
-"os"
-"path/filepath"
-"testing"
+	"os"
+	"path/filepath"
+	"testing"
 )
 
 func TestLoadRejectsInvalidConfig(t *testing.T) {
