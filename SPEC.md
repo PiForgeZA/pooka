@@ -374,7 +374,9 @@ ADR 0008 and ADR 0009 record the decisions.
 - Every minute the daemon checks each running environment. If its last activity is
   older than its idle timeout, the daemon runs `ss -Htn state established` inside
   it. If the output is empty, the daemon stops the environment the way `pooka stop`
-  does. If not, the daemon records activity and checks again next minute.
+  does. It checks activity and open exec sessions again after the TCP probe.
+  Activity that arrived during the probe prevents that stop. If TCP connections
+  exist, the daemon records activity and checks again next minute.
 - `idle_timeout` in `pookad.yaml` is the default for every environment. Default
   `30m`. `0` disables idle stop.
 - An environment can carry its own `idle_timeout` in the description JSON. `0`

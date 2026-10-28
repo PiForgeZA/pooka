@@ -102,6 +102,11 @@ func (s *Server) idleTick(ctx context.Context) []string {
 			s.Touch(e.Name)
 			continue
 		}
+		// Activity can arrive while the connection probe is running.
+		// Recheck before committing to a stop.
+		if s.now().Sub(s.lastActivity(e)) < timeout || s.hasSessions(e.Name) {
+			continue
+		}
 		if err := s.Backend.Stop(ctx, e.Name); err != nil {
 			s.Log.Printf("idle: stop %s: %v", e.Name, err)
 			continue
