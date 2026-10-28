@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 
 	"github.com/PiForgeZA/pooka/internal/config"
 	"github.com/PiForgeZA/pooka/internal/host"
@@ -45,8 +46,80 @@ type setupOptions struct {
 	DaemonURL     string
 	Domain        string // DNS suffix for environment URLs (ADR 0008); default <ip>.sslip.io
 	Pookad        string // local pookad binary to push instead of downloading a release
+	Reinstall     bool   // install pookad again even when the host runs this version
 	SSHConfig     bool   // add the Host *.pooka entry to ~/.ssh/config
 	Yes           bool
+
+	// changed reports whether the user set a flag. A host that already runs pookad
+	// seeds the answers it does not cover.
+	changed func(flag string) bool
+}
+
+// hostInstall is what a host that already has pookad tells setup. A second
+// machine joins that host instead of installing again.
+type hostInstall struct {
+	Version  string // from pookad --version; empty when the binary is missing
+	Template int
+	DiskGB   int
+	Cores    int
+	MemoryMB int
+	Domain   string
+	Storage  string // from the template's rootfs
+	Bridge   string // from the template's net0
+}
+
+// probeInstall reads /etc/pooka/pookad.yaml and the template's config. The
+// second value is false when the host has no pookad.yaml.
+func probeInstall(ctx context.Context, h host.Host) (hostInstall, bool) {
+	var in hostInstall
+	y, err := hostOut(ctx, h, "cat", "/etc/pooka/pookad.yaml")
+	if err != nil || strings.TrimSpace(y) == "" {
+		return in, false
+	}
+	var f struct {
+		Template int    `yaml:"template"`
+		DiskGB   int    `yaml:"disk_gb"`
+		Cores    int    `yaml:"cores"`
+		MemoryMB int    `yaml:"memory_mb"`
+		Domain   string `yaml:"domain"`
+	}
+	if err := yaml.Unmarshal([]byte(y), &f); err != nil {
+		return in, false
+	}
+	in.Template, in.DiskGB, in.Cores, in.MemoryMB = f.Template, f.DiskGB, f.Cores, f.MemoryMB
+	in.Domain = strings.TrimSpace(f.Domain)
+	if v, err := hostOut(ctx, h, pookadBin, "--version"); err == nil {
+		in.Version = strings.TrimPrefix(strings.TrimSpace(v), "pookad version ")
+	}
+	if in.Template > 0 {
+		if c, err := hostOut(ctx, h, "pct", "config", strconv.Itoa(in.Template)); err == nil {
+			in.Storage, in.Bridge = templateStorageBridge(c)
+		}
+	}
+	return in, true
+}
+
+// templateStorageBridge reads the storage and bridge from `pct config` output:
+// `rootfs: local-lvm:vm-9000-disk-0,size=32G` and `net0: name=eth0,bridge=vmbr0,...`.
+func templateStorageBridge(pctConfig string) (storage, bridge string) {
+	for _, line := range strings.Split(pctConfig, "\n") {
+		key, val, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		val = strings.TrimSpace(val)
+		switch strings.TrimSpace(key) {
+		case "rootfs":
+			storage, _, _ = strings.Cut(val, ":")
+		case "net0":
+			for _, kv := range strings.Split(val, ",") {
+				if b, ok := strings.CutPrefix(kv, "bridge="); ok {
+					bridge = b
+				}
+			}
+		}
+	}
+	return storage, bridge
 }
 
 // sslipDomain returns the sslip.io name that resolves to the address from any
@@ -69,6 +142,7 @@ builds the template if it is missing, installs the pookad daemon, and writes
 flags and defaults without asking.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			o.changed = cmd.Flags().Changed
 			return a.runSetup(cmd.Context(), o)
 		},
 	}
@@ -86,6 +160,7 @@ flags and defaults without asking.`,
 	f.StringVar(&o.DaemonURL, "daemon-url", "", "URL clients use for pookad (default https://api.<domain>)")
 	f.StringVar(&o.Domain, "domain", "", "DNS suffix for environment URLs (default <host ip>.sslip.io)")
 	f.StringVar(&o.Pookad, "pookad", "", "push this local pookad binary instead of downloading the release")
+	f.BoolVar(&o.Reinstall, "reinstall", false, "install pookad again even when the host already runs this version")
 	f.BoolVar(&o.SSHConfig, "ssh-config", true, "add a Host *"+SSHSuffix+" entry to ~/.ssh/config so `ssh <name>"+SSHSuffix+"` works")
 	f.BoolVarP(&o.Yes, "yes", "y", false, "do not ask; use the flags and defaults")
 	return c
@@ -257,6 +332,35 @@ func (a *App) runSetup(ctx context.Context, o setupOptions) error {
 	}
 	say("Host %s (%s, %s).", facts.Node, facts.IP, facts.Arch)
 
+	// A host that already runs pookad is the truth for the defaults. Flags the
+	// user set still win. So a second machine joins with Enter or --yes.
+	inst, installed := probeInstall(ctx, h)
+	if installed {
+		if inst.Version != "" {
+			say("pookad %s is installed on %s; its settings are the defaults below.", inst.Version, facts.Node)
+		} else {
+			say("/etc/pooka/pookad.yaml is on %s but pookad is not; its settings are the defaults below.", facts.Node)
+		}
+		changed := func(flag string) bool { return o.changed != nil && o.changed(flag) }
+		seedInt := func(flag string, dst *int, v int) {
+			if v > 0 && !changed(flag) {
+				*dst = v
+			}
+		}
+		seedStr := func(flag string, dst *string, v string) {
+			if v != "" && !changed(flag) {
+				*dst = v
+			}
+		}
+		seedInt("template", &o.Template, inst.Template)
+		seedInt("disk", &o.DiskGB, inst.DiskGB)
+		seedInt("cores", &o.Cores, inst.Cores)
+		seedInt("memory", &o.MemoryMB, inst.MemoryMB)
+		seedStr("storage", &o.Storage, inst.Storage)
+		seedStr("bridge", &o.Bridge, inst.Bridge)
+		seedStr("domain", &o.Domain, inst.Domain)
+	}
+
 	if len(facts.Storages) == 0 {
 		return errors.New("no active lvmthin or zfspool storage on the host; pooka needs one for linked clones and snapshots (SPEC section 5)")
 	}
@@ -330,19 +434,36 @@ func (a *App) runSetup(ctx context.Context, o setupOptions) error {
 	cfg.Host, cfg.Template, cfg.Storage, cfg.Bridge = o.Host, o.Template, o.Storage, o.Bridge
 	cfg.DiskGB, cfg.Cores, cfg.MemoryMB, cfg.SSHPubKey = o.DiskGB, o.Cores, o.MemoryMB, o.SSHPubKey
 	cfg.DaemonURL, cfg.Token, cfg.TokenFile = "", "", ""
-	if o.Daemon && p.askYN("Install the pookad daemon on the host and use it (recommended)", true) {
-		if !scriptsCopied {
-			if err := copyScripts(ctx, h); err != nil {
+	daemonQ := "Install the pookad daemon on the host and use it (recommended)"
+	if installed && inst.Version != "" {
+		daemonQ = "Use the pookad daemon on the host (recommended)"
+	}
+	if o.Daemon && p.askYN(daemonQ, true) {
+		// Install when the host has no pookad, runs another version, gets a local
+		// binary, or the user asks. Otherwise join: no push, no restart.
+		reinstall := !installed || inst.Version == "" || o.Reinstall || o.Pookad != "" || inst.Version != Version
+		switch {
+		case !reinstall:
+			say("pookad %s is running; keeping it. `pooka update --daemon` upgrades it, `pooka setup --reinstall` installs it again.", inst.Version)
+			say("Environment URLs use the domain %s from /etc/pooka/pookad.yaml on the host.", inst.Domain)
+			o.Domain = inst.Domain
+		default:
+			if installed && inst.Version != "" && o.Pookad == "" && !o.Reinstall {
+				say("pookad %s is on the host and this pooka is %s; installing pookad %s.", inst.Version, Version, Version)
+			}
+			if !scriptsCopied {
+				if err := copyScripts(ctx, h); err != nil {
+					return err
+				}
+			}
+			if o.Domain == "" {
+				o.Domain = sslipDomain(facts.IP)
+			}
+			say("Environment URLs are https://<name>-local.<domain>. Any public resolver maps\n*.%s to this host. A LAN DNS can serve a shorter name with one wildcard record.", sslipDomain(facts.IP))
+			o.Domain = strings.Trim(strings.ToLower(p.ask("Domain for environment URLs", o.Domain)), ". ")
+			if err := a.installDaemon(ctx, h, o, facts); err != nil {
 				return err
 			}
-		}
-		if o.Domain == "" {
-			o.Domain = sslipDomain(facts.IP)
-		}
-		say("Environment URLs are https://<name>-local.<domain>. Any public resolver maps\n*.%s to this host. A LAN DNS can serve a shorter name with one wildcard record.", sslipDomain(facts.IP))
-		o.Domain = strings.Trim(strings.ToLower(p.ask("Domain for environment URLs", o.Domain)), ". ")
-		if err := a.installDaemon(ctx, h, o, facts); err != nil {
-			return err
 		}
 		// The host's pookad.yaml is the truth for the domain: an existing file keeps
 		// its own (ADR 0007), and the certificate covers that one. The client URL
