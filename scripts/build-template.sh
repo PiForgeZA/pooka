@@ -50,6 +50,7 @@ pct exec "$VMID" -- mkdir -p /etc/pooka
 pct push "$VMID" "$HERE/template/provision.sh" /etc/pooka/provision.sh --perms 0755
 pct push "$VMID" "$HERE/template/firstboot.sh" /etc/pooka/firstboot.sh --perms 0755
 pct push "$VMID" "$HERE/template/mise.toml" /etc/pooka/mise.toml --perms 0644
+pct push "$VMID" "$HERE/template/agents.sh" /etc/pooka/agents.sh --perms 0755
 
 log "Provisioning (this takes a few minutes)"
 pct exec "$VMID" -- /etc/pooka/provision.sh
