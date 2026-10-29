@@ -60,6 +60,8 @@ func releaseServer(t *testing.T, tag, binary, checksum string) (*httptest.Server
 
 func newUpdateApp(t *testing.T, fh *host.Fake, release *httptest.Server) (*App, func() string, string) {
 	t.Helper()
+	// Explicit test rules take precedence over this healthy installed daemon.
+	fh.On("/usr/local/bin/pookad --version", "pookad version 9.9.9\n")
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "pooka")
 	if err := os.WriteFile(exe, []byte("old binary"), 0o755); err != nil {
