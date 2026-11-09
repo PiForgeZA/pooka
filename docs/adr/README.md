@@ -27,3 +27,4 @@ Date: YYYY-MM-DD
 | [0007](0007-setup-command-and-installer.md) | `pooka setup` provisions the host; the host scripts ship inside the binary | accepted |
 | [0008](0008-urls-proxy-and-tls.md) | Each environment gets an HTTPS URL served by a proxy inside pookad | accepted |
 | [0009](0009-idle-stop.md) | Idle environments stop after a timeout, unless a TCP connection is open inside | accepted |
+| [0010](0010-no-public-urls.md) | pooka does not expose environments to the internet | accepted |

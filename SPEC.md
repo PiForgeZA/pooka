@@ -304,10 +304,9 @@ These are not part of phases 1 and 2. They set the direction.
   sections 8 and 12.
 - Phase 3, section 18: a reverse proxy with a wildcard domain and TLS. A request to
   an environment's URL starts it. Idle environments stop after a timeout.
-- Phase 3b, candidate: a tunnel such as Cloudflare Tunnel or frp in front of the proxy,
-  so `public` URLs reach the internet with a real certificate. The first-label routing
-  in ADR 0008 allows this without changes. Needs an ADR on whether `api.<domain>` is
-  exposed too.
+- Not planned: a tunnel or any other path from the internet to environment URLs.
+  pooka stays on the LAN. ADR 0010 records the decision and what a user does on
+  their own if they need a public URL.
 - Phase 4: an agent inside the environment for streaming exec, PTY, file watch and
   services.
 - Phase 5: a QEMU backend on Proxmox, then a Firecracker backend beside Proxmox.
