@@ -267,9 +267,11 @@ go vet ./...
 ```
 
 CI runs gofmt, vet, tests, shellcheck, a cross-compile matrix and a GoReleaser config
-check on every push and pull request. Pushing a tag `vX.Y.Z` builds release archives
-for Linux and macOS, amd64 and arm64, and publishes them with a changelog grouped by
-conventional commit type.
+check on every push and pull request. release-please watches `main` and keeps one
+release PR open with the next version and the changelog, both derived from the
+conventional-commit PR titles. Merging that PR creates the tag `vX.Y.Z`, and
+GoReleaser then builds the archives for Linux and macOS, amd64 and arm64, and
+attaches them to the release.
 
 Layout: `cmd/pooka` and `cmd/pookad` are the mains, `internal/cli` the cobra
 commands, `internal/backend` the `Backend` interface, `internal/backend/lxc` the
