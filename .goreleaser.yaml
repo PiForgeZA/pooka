@@ -1,4 +1,7 @@
 # GoReleaser v2. Runs on tags matching v*. See .github/workflows/release.yml.
+# release-please creates the tag, the release and its notes from CHANGELOG.md
+# (.github/workflows/release-please.yml). GoReleaser only builds the archives and
+# attaches them to that release.
 version: 2
 
 project_name: pooka
@@ -61,25 +64,8 @@ snapshot:
   version_template: "{{ incpatch .Version }}-dev+{{ .ShortCommit }}"
 
 changelog:
-  sort: asc
-  use: github
-  groups:
-    - title: Features
-      regexp: '^feat(\(.*\))?:'
-      order: 0
-    - title: Fixes
-      regexp: '^fix(\(.*\))?:'
-      order: 1
-    - title: Docs
-      regexp: '^docs(\(.*\))?:'
-      order: 2
-    - title: Other
-      order: 999
-  filters:
-    exclude:
-      - "^chore"
-      - "^test"
-      - "^ci"
+  # release-please writes the notes. See the header comment.
+  disable: true
 
 release:
   github:
@@ -87,10 +73,5 @@ release:
     name: pooka
   draft: false
   prerelease: auto
-  footer: |
-    ## Install
-
-    Download the archive for your platform, unpack it, and put `pooka` on your PATH.
-    The Linux archives also contain `pookad`, the daemon that speaks the Sprites API,
-    and `scripts/` for building the template and installing the daemon on your Proxmox
-    host. See the README quick start.
+  # Keep the notes release-please wrote. Only the assets are added.
+  mode: keep-existing

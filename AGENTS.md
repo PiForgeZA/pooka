@@ -78,7 +78,9 @@ When asked to commit, use conventional commits: `feat:`, `fix:`, `docs:`, `refac
 
 - `main` is protected. All changes arrive by pull request with CI green.
 - PRs are squash-merged. The PR title becomes the commit on `main`, so it must be a
-  conventional commit, for example `feat: idle sleep`. GoReleaser builds the changelog
-  from these titles.
+  conventional commit, for example `feat: idle sleep`. release-please builds the
+  changelog and picks the next version from these titles.
+- Releases: release-please keeps one release PR open on `main`. Merging it tags the
+  release and GoReleaser publishes the archives. Do not tag by hand.
 - Update a branch by merging `main` into it. Never rebase or force-push a shared branch.
 - Branches are deleted after merge.
