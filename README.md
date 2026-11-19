@@ -49,7 +49,9 @@ pooka destroy dev1                # delete it and its checkpoints
 
 Every environment comes from one template that you build once. The default template
 has Ubuntu 24.04, git and build tools, mise-managed Node, Python and Go, Claude Code,
-Codex, herdr, and an SSH server that accepts your key. Both agents come with
+Codex, the [herdr](https://github.com/herdrdev/herdr), [paseo](https://paseo.sh) and
+[ThinkRail](https://thinkrail.ai) agent front ends, and an SSH server that accepts
+your key. Both agents come with
 [rtk](https://github.com/rtk-ai/rtk), the
 [mattpocock/skills](https://github.com/mattpocock/skills) and
 [ponytail](https://github.com/DietrichGebert/ponytail) plugins, and Claude Code with
@@ -144,6 +146,13 @@ up an IP, on any network that reaches the daemon and the environment. Host keys 
 to `~/.config/pooka/known_hosts`; `destroy` drops the entry so a new environment
 under the same name is accepted.
 
+An environment accepts the key that `create` sent, read from the `ssh_pubkey` file
+in your config. That file may hold several public keys, one per line, so a laptop
+and a desktop both get in: put every key in `~/.ssh/pooka-keys.pub` on each machine
+and point `ssh_pubkey` at it. An existing environment takes another key with
+`pooka exec --root <name> -- sh -c 'echo "<key>" >> /home/pooka/.ssh/authorized_keys'`.
+pooka owns access this way; dotfiles carry configuration, not keys (ADR 0012).
+
 An environment with no activity for 30 minutes stops. Activity is a URL request, an
 exec session, a file or checkpoint call, or any established TCP connection inside
 the environment, so an open SSH or IDE session keeps it up. `pooka idle <name> off`
@@ -218,7 +227,7 @@ vmid_range: [9100, 9199]              # VMIDs pooka may use
 disk_gb: 32                           # thin, so cheap
 cores: 4
 memory_mb: 8192
-ssh_pubkey: ~/.ssh/id_ed25519.pub     # injected into each environment
+ssh_pubkey: ~/.ssh/id_ed25519.pub     # injected into each environment; one key per line
 ```
 
 With `daemon_url` set, every command goes to the daemon. Without it, every command

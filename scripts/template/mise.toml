@@ -9,6 +9,8 @@ go = "1.27"
 # Claude Code is installed by its native installer in provision.sh, because the npm
 # package needs a postinstall step that the mise npm backend skips.
 herdr = "latest"
+# paseo runs several agents behind a daemon on port 6767; reach it over ssh://pooka@<name>.pooka.
+"npm:@getpaseo/cli" = "latest"
 
 [settings]
 experimental = true

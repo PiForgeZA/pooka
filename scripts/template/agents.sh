@@ -40,4 +40,11 @@ jq -s '.[0] * {hooks: {PreToolUse: ((.[0].hooks.PreToolUse // []) + .[1].hooks.P
   "$HOME/.claude/settings.json" "$src/settings-example.json" >"$HOME/.claude/settings.json.new"
 mv "$HOME/.claude/settings.json.new" "$HOME/.claude/settings.json"
 
+echo "== thinkrail"
+# JetBrains ThinkRail, an agentic IDE in the browser driven by the pi agent. The
+# install script checks the release sha256 and puts thinkrail on PATH. It needs a
+# model provider on first launch; the user connects one inside the environment.
+curl -fsSL https://raw.githubusercontent.com/JetBrains/thinkrail/main/install.sh | bash
+thinkrail --version || echo "warning: thinkrail --version failed; check the installer output"
+
 echo "== agent toolchain done"
