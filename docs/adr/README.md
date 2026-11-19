@@ -28,3 +28,4 @@ Date: YYYY-MM-DD
 | [0008](0008-urls-proxy-and-tls.md) | Each environment gets an HTTPS URL served by a proxy inside pookad | accepted |
 | [0009](0009-idle-stop.md) | Idle environments stop after a timeout, unless a TCP connection is open inside | accepted |
 | [0010](0010-no-public-urls.md) | pooka does not expose environments to the internet | accepted |
+| [0012](0012-ssh-keys-not-dotfiles.md) | pooka installs SSH keys; dotfiles carry configuration, not access | accepted |

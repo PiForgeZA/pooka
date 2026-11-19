@@ -63,9 +63,11 @@ The template gives environments their speed. Build it once. Rebuild it when tool
 
 1. Create an unprivileged Ubuntu LTS container on the thin storage.
 2. Set `features: nesting=1,keyctl=1` so systemd and Docker work.
-3. Install base packages with apt. Install mise. Install language runtimes, coding
-   agents and herdr with mise from `/etc/mise/config.toml`. The repo keeps this file at
-   `scripts/template/mise.toml`. Edit it to change the tool set.
+3. Install base packages with apt, including `inotify-tools`. Install mise. Install
+   language runtimes, coding agents, herdr and paseo with mise from
+   `/etc/mise/config.toml`. The repo keeps this file at `scripts/template/mise.toml`.
+   Edit it to change the tool set. Install ThinkRail with its own installer in
+   `scripts/template/agents.sh`.
 4. Create a user named `pooka` with passwordless sudo. mise installs tools for this user.
    Commands run as `pooka`, not root.
 5. Install the agent toolchain for the `pooka` user: rtk with its Claude Code hook and
@@ -106,8 +108,11 @@ The environment variables `SPRITES_API_URL` and `SPRITE_TOKEN` override `daemon_
 and `token`, so one shell serves both `pooka` and the official `sprite` CLI.
 
 The template runs an SSH server that accepts keys only and refuses root. `create` passes
-the public key named by `ssh_pubkey` to the firstboot script as `POOKA_SSH_PUBKEY`. The
-user can then reach the environment with `ssh pooka@<ip>` and with tools such as herdr.
+the contents of the file named by `ssh_pubkey` to the firstboot script as
+`POOKA_SSH_PUBKEY`. The file holds one or more public keys, one per line. The firstboot
+script appends them all to `authorized_keys`. The user can then reach the environment
+with `ssh pooka@<ip>` and with tools such as herdr. SSH keys are pooka's job. Dotfiles
+carry configuration, not keys. ADR 0012.
 
 A `.pooka` file in the current directory can name the active environment. The command
 `pooka use <name>` writes it. Commands without a name use the active environment.

@@ -12,7 +12,7 @@ apt-get -y install --no-install-recommends \
   ca-certificates curl wget gnupg sudo locales tzdata \
   git build-essential pkg-config \
   vim nano tmux htop jq ripgrep fd-find fzf unzip zip tree less \
-  python3 openssh-client openssh-server rsync \
+  python3 openssh-client openssh-server rsync inotify-tools \
   libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev libffi-dev liblzma-dev
 
 locale-gen en_US.UTF-8 >/dev/null
